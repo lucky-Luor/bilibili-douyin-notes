@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""bilibili-douyin-notes 第一步：通过视频链接获取元数据与官方字幕（含AI字幕，需SESSDATA）。
+"""bilibili-douyin-notes 第一步（B站）：通过视频链接获取元数据与官方字幕（含AI字幕，需SESSDATA）。
 
 用法:
     python bili_fetch.py <视频链接或BV号> [输出目录]
@@ -9,16 +9,26 @@
     <输出目录>/metadata.json   视频元数据（标题、UP主、分P列表等）
     <输出目录>/<页码>_<分P名>.txt  每个分P的字幕文本（有时间戳），无字幕则跳过
     stdout 最后一行输出 JSON 摘要（供调用方解析）
+
+字幕三态（每个分P的 subtitle_detail 字段）:
+    cc / ai       拿到字幕（subtitle=true）
+    none          接口正常返回但确实没有字幕 → 走 ASR，不用再折腾
+    api_empty     接口返回了字幕条目但 URL 全为空（/x/player/v2 对部分视频
+                  只给元信息不给 URL 的已知问题，已自动尝试 wbi/v2 兜底）
+                  → 提示用户填 SESSDATA 后重跑，仍失败再走 ASR
 """
 import json
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CONFIG = Path(__file__).resolve().parent.parent / "config.json"
+RETRIES = 3  # 与抖音侧一致的失败重试次数
 
 
 def load_sessdata() -> str:
@@ -28,17 +38,30 @@ def load_sessdata() -> str:
         return ""
 
 
-def http_get(url: str, cookie: str = "") -> bytes:
+def http_get(url: str, cookie: str = "", retries: int = RETRIES) -> bytes:
+    """带重试的 GET：网络类错误按 1s/2s 退避重试，与抖音侧对称。"""
     headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
     if cookie:
         headers["Cookie"] = f"SESSDATA={cookie}"
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read()
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            last_exc = e
+            if attempt < retries - 1:
+                time.sleep(attempt + 1)
+    raise last_exc
 
 
 def api(url: str, cookie: str = "") -> dict:
-    return json.loads(http_get(url, cookie).decode("utf-8"))
+    """请求B站 API 并校验业务 code，失效视频/风控给出可读报错而非裸 KeyError。"""
+    data = json.loads(http_get(url, cookie).decode("utf-8"))
+    if data.get("code") != 0:
+        raise RuntimeError(f"接口失败 code={data.get('code')}: {data.get('message')} ({url[:80]})")
+    return data
 
 
 def extract_bvid(text: str) -> str:
@@ -64,8 +87,28 @@ def subtitle_to_text(sub_json: dict) -> str:
                      for it in sub_json.get("body", []))
 
 
+def fetch_subtitles(bvid: str, cid: int, cookie: str) -> list:
+    """依次尝试 player/v2 与 player/wbi/v2，返回过滤掉空URL后的字幕条目。
+
+    /x/player/v2 对大量视频只返回 ai-zh 元信息而 subtitle_url 为空（已知问题），
+    wbi/v2 是实测更可能给出真实 URL 的兜底接口。
+    """
+    subs: list = []
+    for path in ("x/player/v2", "x/player/wbi/v2"):
+        try:
+            player = api(f"https://api.bilibili.com/{path}?bvid={bvid}&cid={cid}", cookie)
+            subs = (player.get("data") or {}).get("subtitle", {}).get("subtitles", []) or []
+        except Exception:
+            subs = []
+        # 过滤空 URL：有 URL 的条目才可用；两个接口取并集中第一个有效来源
+        usable = [s for s in subs if (s.get("subtitle_url") or "").strip()]
+        if usable:
+            return usable
+    return []
+
+
 def pick_subtitle(subtitles: list) -> dict | None:
-    """优先中文字幕（CC > AI），其次任意一条。"""
+    """优先中文字幕（CC > AI），其次任意一条。调用前应已过滤空URL。"""
     def rank(s):
         lan = s.get("lan", "")
         ai = s.get("ai_type", 0) != 0 or lan.startswith("ai")
@@ -108,13 +151,12 @@ def main():
 
     for p in pages:
         page_no, part, cid = p["page"], p["part"], p["cid"]
-        entry = {"page": page_no, "part": part, "cid": cid, "subtitle": False}
+        entry = {"page": page_no, "part": part, "cid": cid,
+                 "subtitle": False, "subtitle_detail": "none"}
         try:
-            player = api(f"https://api.bilibili.com/x/player/v2?bvid={bvid}&cid={cid}",
-                         sessdata)
-            subs = (player.get("data") or {}).get("subtitle", {}).get("subtitles", [])
-            sub = pick_subtitle(subs)
-            if sub:
+            subs = fetch_subtitles(bvid, cid, sessdata)
+            if subs:
+                sub = pick_subtitle(subs)
                 sub_url = sub["subtitle_url"]
                 if sub_url.startswith("//"):
                     sub_url = "https:" + sub_url
@@ -122,9 +164,16 @@ def main():
                 if text.strip():
                     fname = f"{page_no:02d}_{safe_name(part)}.txt"
                     (outdir / fname).write_text(text, encoding="utf-8")
-                    entry.update(subtitle=True, lan=sub.get("lan", ""),
-                                 ai=bool(sub.get("ai_type")), file=fname)
+                    lan = sub.get("lan", "")
+                    is_ai = bool(sub.get("ai_type")) or lan.startswith("ai")
+                    entry.update(subtitle=True, lan=lan, ai=is_ai,
+                                 subtitle_detail="ai" if is_ai else "cc", file=fname)
+                else:
+                    entry["subtitle_detail"] = "api_empty"  # 字幕内容体为空
+            else:
+                entry["subtitle_detail"] = "api_empty"  # 两个接口都没给可用URL
         except Exception as e:  # 单个分P失败不阻塞整体
+            entry["subtitle_detail"] = "error"
             entry["error"] = str(e)
         report["pages"].append(entry)
 
