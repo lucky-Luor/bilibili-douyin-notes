@@ -22,10 +22,11 @@
   5. GET /aweme/v1/web/aweme/detail/ -> aweme_detail
   6. play_addr 把 /playwm/ 替换为 /play/ 得无水印地址，download_addr 兜底
 
-依赖: pip install gmssl ；abogus.py 为 GPLv3 代码（TikTokDownloader ->
-Evil0ctal/Douyin_TikTok_Download_API -> BiliNote 简化移植），分发需保留其许可头。
+依赖: pip install gmssl ；abogus.py（抖音签名算法，GPLv3）由 ensure_abogus.py
+首次使用时自动下载，不入本仓库（保持仓库主体 MIT）。
 若接口返回 403/Signature 错误，多半是抖音升级了签名算法，
-参考上述两个开源项目更新 abogus.py 或 WEB_SIGN_SALT。
+参考上游开源项目（TikTokDownloader / Douyin_TikTok_Download_API / BiliNote）
+更新 abogus.py 或 WEB_SIGN_SALT。
 """
 import hashlib
 import http.client
@@ -40,7 +41,12 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from abogus import ABogus  # noqa: E402
+try:
+    from abogus import ABogus
+except ImportError:
+    import ensure_abogus
+    ensure_abogus.ensure()
+    from abogus import ABogus
 
 # 此 UA 必须与 abogus.py 中硬编码的 ua_code 配套，不能随意更换
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
