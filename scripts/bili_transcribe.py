@@ -3,7 +3,7 @@
 """bilibili-douyin-notes 第二步（ASR兜底）：视频无官方字幕时，下载音频并用 faster-whisper 转写。
 
 用法:
-    python bili_transcribe.py <metadata.json路径> [--page 页码] [--model 模型] [--lang 语言]
+    python bili_transcribe.py <metadata.json路径> [--page 页码] [--model 模型] [--lang 语言] [--device 设备]
 
 说明:
     - 页码对应 metadata.json 中 pages[].page（1开始）；不传则转写所有尚无文本的分P
@@ -12,6 +12,8 @@
       视频文件（faster-whisper 经 PyAV 可直接解码 mp4 音轨，无需抽轨）
     - 模型默认 small；首次运行会从 HF（已默认走 hf-mirror.com）下载模型
       tiny≈75MB / base≈145MB / small≈480MB / medium≈1.5GB，CPU 用 int8
+    - 设备自动检测：有 NVIDIA GPU（CUDA 可用）时用 cuda+float16，否则 cpu+int8；
+      可用 --device cpu/cuda 强制指定
     - 输出: <输出目录>/<页码>_<分P名>.txt（[mm:ss] 时间戳格式）
     - stdout 每处理完一个分P输出一行 JSON 进度
 """
@@ -79,11 +81,29 @@ def model_cached(model_size: str) -> bool:
     return any((b / name).exists() for b in bases)
 
 
-def transcribe(audio_path: Path, model_size: str, lang: str | None) -> str:
+def detect_device(device: str) -> str:
+    """device=auto 时检测 CUDA 是否可用；否则原样返回。"""
+    if device != "auto":
+        return device
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def transcribe(audio_path: Path, model_size: str, lang: str | None,
+               device: str = "auto") -> str:
     if model_cached(model_size):
         os.environ["HF_HUB_OFFLINE"] = "1"
     from faster_whisper import WhisperModel
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+    device = detect_device(device)
+    if device == "cuda":
+        model = WhisperModel(model_size, device="cuda", compute_type="float16")
+    else:
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
     # initial_prompt 引导 whisper 输出简体中文，避免转成繁体
     prompt = "以下是普通话的简体中文转写。" if lang == "zh" else None
     segments, info = model.transcribe(str(audio_path), language=lang,
@@ -100,6 +120,8 @@ def main():
     ap.add_argument("--model", default="small",
                     help="faster-whisper 模型: tiny/base/small/medium/large-v3（默认small）")
     ap.add_argument("--lang", default="zh", help="语言，zh=中文，auto=自动检测（默认zh）")
+    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"],
+                    help="推理设备：auto=自动检测CUDA（默认），cpu, cuda")
     args = ap.parse_args()
 
     meta_path = Path(args.meta)
@@ -127,10 +149,11 @@ def main():
                 audio = outdir / p["media_path"]
             else:
                 download_audio(meta["bvid"], p["cid"], audio, cookie)
-            text = transcribe(audio, args.model, lang)
+            text = transcribe(audio, args.model, lang, args.device)
             out_file.write_text(text, encoding="utf-8")
             print(json.dumps({"page": p["page"], "part": p["part"],
                               "file": str(out_file), "chars": len(text),
+                              "device": detect_device(args.device),
                               "status": "ok"}, ensure_ascii=False), flush=True)
         except Exception as e:
             print(json.dumps({"page": p["page"], "part": p["part"],
