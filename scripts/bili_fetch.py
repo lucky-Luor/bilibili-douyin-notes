@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""bilibili-notes 第一步：通过视频链接获取元数据与官方字幕（含AI字幕，需SESSDATA）。
+"""bilibili-douyin-notes 第一步：通过视频链接获取元数据与官方字幕（含AI字幕，需SESSDATA）。
 
 用法:
     python bili_fetch.py <视频链接或BV号> [输出目录]
