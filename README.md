@@ -6,7 +6,7 @@
 
 字幕抓取 · 本地语音识别 · 重点截图 · 笔记模板 —— 全流程免费，无需登录
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/平台-B站%20%7C%20抖音-green.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.10%2B-yellow.svg)]()
 [![Agent Skills](https://img.shields.io/badge/规范-Agent%20Skills%20(SKILL.md)-orange.svg)]()
@@ -55,8 +55,14 @@
 
 ## 📦 安装
 
-本 skill 遵循 **Agent Skills 规范**（`SKILL.md`），任何支持该规范的 AI Agent 均可安装：
-Claude Code 放入 `~/.claude/skills/`，ZCode 放入 `~/.zcode/skills/`，其他兼容 Agent 放入其 skills 目录。
+本 skill 遵循 **Agent Skills 规范**（`SKILL.md`），任何支持该规范的 AI Agent 均可安装。
+支持的安装路径：
+
+- `~/.claude/skills/` —— Claude Code
+- `~/.zcode/skills/` —— ZCode
+- `~/.agents/skills/` —— DSH、Codex 等多种 Agent 共用的通用 skills 路径
+
+其他兼容 Agent 放入其各自的 skills 目录即可。
 
 ```bash
 # 1. 克隆到你的 agent 的 skills 目录（以 ZCode 为例）
@@ -130,9 +136,14 @@ python scripts/bili_screenshot.py "<输出目录>/metadata.json" "<输出目录>
 │   ├── douyin_fetch.py    # 抖音：元数据 + 无水印视频下载（游客身份）
 │   ├── bili_transcribe.py # faster-whisper 本地 ASR 兜底（双平台兼容）
 │   ├── bili_screenshot.py # 重点截图（锚点/自动关键词 + PyAV 抽帧）
-│   └── abogus.py          # 抖音 a_bogus 签名算法（GPLv3，见致谢）
+│   ├── ensure_abogus.py   # abogus.py 缺失时从上游按需下载（含校验与重试）
+│   └── abogus.py          # 抖音 a_bogus 签名算法（GPLv3，首次使用时自动下载，不入库）
+├── references/
+│   ├── anchors.json       # 截图时间戳锚点库
+│   ├── asr-glossary.json  # ASR 技术术语校正表
+│   └── note-template.md   # 课堂笔记模板
 ├── config.example.json    # 配置模板（SESSDATA）
-└── LICENSE                # GPL-3.0
+└── LICENSE                # MIT
 ```
 
 ## ⚠️ 已知限制
@@ -140,17 +151,26 @@ python scripts/bili_screenshot.py "<输出目录>/metadata.json" "<输出目录>
 - 长视频（>1小时）本地转写耗时约为视频时长的 1~3 倍（CPU int8）
 - ASR 转写的技术术语可能出错（如 IoC、Starter），生成笔记时建议结合上下文或代码仓库校正
 - 抖音依赖平台签名算法，平台升级时可能临时失效（表现为 detail 接口 403），需跟进上游项目更新签名实现
+- 抖音签名的 `abogus.py` 依赖上游仓库（BiliNote）托管：上游失效或迁移时 `ensure_abogus.py` 下载的文件可能过时，需跟进上游更新
 - 仅支持公开可访问的视频
 
 ## 📄 许可证
 
-本项目采用 [GPL-3.0](LICENSE) 协议开源。
+本仓库主体采用 [MIT](LICENSE) 协议开源。
 
-> 选择 GPL-3.0 的原因：`scripts/abogus.py` 源自 GPL-3.0 项目
-> [TikTokDownloader](https://github.com/JoeanAmier/TikTokDownloader)（经
-> [Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)
-> 与 [BiliNote](https://github.com/JefferyHcool/BiliNote) 移植），按 GPL 要求，
-> 包含该代码的合并作品需以 GPL-3.0 整体分发，且保留其原始许可头。
+**例外：`scripts/abogus.py` 不在本仓库中分发。** 该文件是抖音 a_bogus 签名算法的
+GPLv3 代码，源自 [TikTokDownloader](https://github.com/JoeanAmier/TikTokDownloader)
+（经 [Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)
+与 [BiliNote](https://github.com/JefferyHcool/BiliNote) 移植）。由于 GPL 的传染性
+（copyleft）：一旦仓库中包含这份代码，整个仓库就必须整体按 GPL-3.0 分发。
+为了让本仓库保持宽松的 MIT 协议，我们把 `abogus.py` 移出仓库，由
+`scripts/ensure_abogus.py` 在**首次使用抖音功能时自动下载**到本地；下载后的该文件
+遵循其自身的 **GPLv3** 条款（上游文件头的 GPLv3/Apache-2.0 声明自相矛盾，本项目
+按更严格的 GPLv3 处理），与 MIT 的仓库主体构成"聚合作品"，互不传染。
+
+> 手动安装（网络受限时）：从 BiliNote 仓库的
+> `backend/app/downloaders/douyin_helper/abogus.py`
+> 下载文件，放到本 skill 的 `scripts/abogus.py` 即可。
 
 ## 🙏 致谢
 

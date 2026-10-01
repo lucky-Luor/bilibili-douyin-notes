@@ -17,9 +17,12 @@ description: 把B站/抖音视频整理成Markdown课堂笔记。当用户发来
 
 ## 工具位置
 
-- 脚本目录：`~/.zcode/skills/bilibili-douyin-notes/scripts/`
-  （Windows 实际路径 `C:\Users\罗任\.zcode\skills\bilibili-douyin-notes\scripts\`）
-- 配置文件：`~/.zcode/skills/bilibili-douyin-notes/config.json`（存放 SESSDATA）
+- 脚本目录：本 skill 安装目录下的 `scripts/`（下文命令中的绝对路径请替换为你的实际安装路径）
+- 配置文件：本 skill 安装目录下的 `config.json`（存放 SESSDATA）
+- 参考资产：
+  - `references/note-template.md` —— 课堂笔记模板、★语义定义、证据锚点规范
+  - `references/asr-glossary.json` —— ASR 术语纠错词表（真实错法→正确写法）
+  - `references/anchors.json` —— 截图锚点关键词表（按分P，可按需补充）
 
 ## 工作流程
 
@@ -27,17 +30,19 @@ description: 把B站/抖音视频整理成Markdown课堂笔记。当用户发来
 
 ```bash
 # B站（也支持 b23.tv 短链）
-python "C:/Users/罗任/.zcode/skills/bilibili-douyin-notes/scripts/bili_fetch.py" "<视频链接>" "<工作目录>/bili-notes-<BV号>"
+python "<skill安装目录>/scripts/bili_fetch.py" "<视频链接>" "<工作目录>/bili-notes-<BV号>"
 
 # 抖音（也支持 v.douyin.com 短链和整段分享口令文本）
-python "C:/Users/罗任/.zcode/skills/bilibili-douyin-notes/scripts/douyin_fetch.py" "<链接或口令>" "<工作目录>/douyin-notes-<视频ID>"
+python "<skill安装目录>/scripts/douyin_fetch.py" "<链接或口令>" "<工作目录>/douyin-notes-<视频ID>"
 ```
 
 - 两个脚本都自动生成 `<输出目录>/metadata.json`，stdout 最后一行是 JSON 摘要。
-- **B站**：每个分P的字幕 `.txt`（带 `[mm:ss]` 时间戳），检查摘要里每个分P的 `subtitle` 字段：
-  - 全部为 `true` → 直接进入第三步；
-  - 有 `false`（`sessdata_loaded:false` 时常见，AI字幕需要登录）→ 先提示用户可在 `config.json` 里填 SESSDATA 获得 AI 字幕，然后进入第二步 ASR 兜底。
-- **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（无水印，本地已存在则跳过下载），`subtitle` 恒为 `false`，直接进入第二步 ASR。
+- **B站**：每个分P的字幕 `.txt`（带 `[mm:ss]` 时间戳），按摘要里每个分P的 **`subtitle_detail` 字段四态分流**：
+  - `cc` / `ai` → 已拿到官方/AI字幕，直接进入第三步生成笔记；
+  - `none` → 该分P确实没有字幕，直接进入第二步 ASR，不用再折腾；
+  - `api_empty` → 接口没返回可用字幕URL（`sessdata_loaded:false` 时常见，AI字幕需要登录）：**先提示用户在 config.json 填 SESSDATA 后重跑一次 fetch**；重跑后仍是 `api_empty` 才走第二步 ASR 兜底；
+  - `error` → 查看摘要里的 error 信息（可能是视频失效/风控），重试一次或直接告知用户。
+- **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（无水印，本地已存在则跳过下载），无字幕，直接进入第二步 ASR。
 
 ### 第二步（兜底）：语音识别转写
 
@@ -45,46 +50,51 @@ python "C:/Users/罗任/.zcode/skills/bilibili-douyin-notes/scripts/douyin_fetch
 
 ```bash
 # 只转写第N个分P（推荐先转1个试听质量/估算耗时）
-python "C:/Users/罗任/.zcode/skills/bilibili-douyin-notes/scripts/bili_transcribe.py" "<工作目录>/bili-notes-<BV号>/metadata.json" --page 1
+python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-notes-<BV号>/metadata.json" --page 1
 
 # 转写所有缺字幕的分P
-python "C:/Users/罗任/.zcode/skills/bilibili-douyin-notes/scripts/bili_transcribe.py" "<工作目录>/bili-notes-<BV号>/metadata.json"
+python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-notes-<BV号>/metadata.json"
 ```
 
 注意事项：
-- **耗时**：CPU int8 下 small 模型约 1~3 倍速实时，长视频（>1小时）耗时明显，转写前告知用户预计时间；质量不满意可 `--model medium` 重跑（先删对应 txt）。
+- **设备**：脚本自动检测 CUDA（有 NVIDIA GPU 用 float16，否则 CPU int8）；检测异常时可用 `--device cpu` / `--device cuda` 强制指定。
+- **耗时**：CPU int8 下 small 模型约 1~3 倍速实时，长视频（>1小时）耗时明显，转写前告知用户预计时间；长视频或对质量不满意时用 `--model medium` 重转（**先删对应的 txt**，否则脚本会跳过）。
 - 首次运行会下载模型（small≈480MB，自动走 hf-mirror.com 镜像）。
-- ASR 文稿没有标点分段质量保证，生成笔记时要靠上下文重新组织和纠错（技术术语常被转错，如 IoC→"控制反转"，需按课程主题人工校正）。
+- ASR 文稿没有标点分段质量保证，技术术语常被转错——生成笔记前用 `references/asr-glossary.json` 词表对照校正（见第三步第2条）。
 
 ### 第二步半（可选）：抽取重点截图
 
 用户需要"带截图的笔记"时，用脚本按转写稿时间戳自动抽取重点画面：
 
 ```bash
-# 全部分P（B站查内置锚点表，抖音/无锚点页自动提取关键词）
-python "C:/Users/罗任/.zcode/skills/bilibili-douyin-notes/scripts/bili_screenshot.py" "<工作目录>/metadata.json" "<工作目录>" "<工作目录>/images"
+# 全部分P（B站查 references/anchors.json 锚点表，抖音/无锚点页自动提取关键词）
+python "<skill安装目录>/scripts/bili_screenshot.py" "<工作目录>/metadata.json" "<工作目录>" "<工作目录>/images"
 
 # 只抽指定分P（逗号分隔页码）
-python ".../bili_screenshot.py" <meta> <txt目录> <images目录> 2,6,11
+python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <images目录> 2,6,11
 ```
 
-- B站：在转写稿里搜每分P"锚点关键词"（如 @Component、循环依赖、log4j），取首次出现时间-3s（ASR滞后），下载 480p DASH 视频抽帧后即删；
-- 抖音：直接复用第一步下载的本地视频抽帧，不再联网；锚点用 `auto_anchors()` 从转写稿自动提取英文/代码样关键词（@注解、驼峰词、专有名词）；
+- B站：在转写稿里搜每分P"锚点关键词"（如 @Component、循环依赖、log4j），取首次出现时间-3s（ASR滞后），下载 480p DASH 视频抽帧后即删；锚点表外置在 `references/anchors.json`，该文件没有的页码（或抖音平台）自动用 `auto_anchors()` 从转写稿提取中英文关键词；
+- 抖音：直接复用第一步下载的本地视频抽帧，不再联网；
 - 未登录最高 480p（852×480），够看清 PPT/代码；填了 SESSDATA 会自动取更高画质；
-- **截图必须校验**：抽到的帧可能是黑屏/转场/老师头像。用 MiMo-V2.5 批量识别（curl 调 opencode 代理端点），BAD 的帧把时间戳 +30s 左右重抽（可用 mcp clipboard-vision 或在脚本 ANCHORS 表里调整）；锚点未命中时先 grep 转写稿找 ASR 实际用词（如"权限"被转成"全线"、@Component→"art component"、Starter→"Stutter"）再补正则；
+- **画质 QC**：脚本内置本地画质初筛（亮度/清晰度），非 ok 帧自动 +30s 重抽一次并标记（进度 JSON 里每帧 `qc` 字段：`ok`=合格，`dark`/`bright`/`blurry`=重抽后仍未通过的原因；取不到帧的锚点进 `failed` 列表，status 变 `partial`）。Agent 生成笔记时对非 `ok` 帧复核（视觉识别）决定是否采用；
+- 锚点未命中时先 grep 转写稿找 ASR 实际用词（对照 `references/asr-glossary.json`，如"权限"被转成"全线"、@Component→"art component"、Starter→"Stutter"）再补正则；
 - 生成笔记时以 `![说明](images/pXX_yyy.png)` 相对路径嵌入对应小节，文件名用 ASCII。
 
 ### 第三步：生成课堂笔记
 
 1. 读取 metadata.json（分P结构、时长）+ 各分P转写/字幕文本。
-2. 按下方模板生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`
-   （序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。
-3. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，
-   可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，
-   把笔记中的代码示例换成仓库中的真实代码（首选做法，参考本次 JavaEE 课程的笔记效果）。
-4. 长视频（>1小时）内容量大，可将转写文本分批阅读后再汇总。
+2. **ASR 术语校正（资产化，不是人工凭感觉）**：先读 `references/asr-glossary.json`，对每个转写稿 grep 词表左侧的错法写法（如 "art component"、"Stutter"、"加瓦一"、"BinFacture"），命中即按右侧正确写法理解/替换；词表未覆盖的新错法，按同样格式补进词表的 `map` 里。
+3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。禁止跳过分块直接全文阅读长转写稿。
+4. 按 `references/note-template.md` 生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。小节要点必须用 **`★数量 + 要点句 + [mm:ss]`** 格式（★ 语义见模板文件第二节），时间戳必须取自转写稿真实存在的时间行。
+5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
+6. **质量门禁**：生成后运行
+   `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
+   errors 必须为 0 才交付；warnings 酌情处理（如补证据锚点、精简篇幅）。
 
 ## 笔记模板
+
+模板全文（完整骨架 + ★语义定义 + 证据锚点规范 + 要点清单）见 **`references/note-template.md`**，生成笔记前必读。骨架速览：
 
 ```markdown
 # 课堂笔记 <序号>：<主题>
@@ -102,35 +112,45 @@ python ".../bili_screenshot.py" <meta> <txt目录> <images目录> 2,6,11
 
 **核心思想：**<一句话>
 
-<要点、代码示例、表格对比……>
+- ★★★ 要点句 [mm:ss]
+- ★★ 要点句 [mm:ss]
+
+<真实代码示例（注明来源：分P/时刻 或 仓库文件）……>
+<概念对比表格……>
 
 ---
 
 ## 本讲知识地图
 
-<用一个 ASCII 图/缩进列表把本讲知识点串起来>
+<ASCII 图/缩进列表串起本讲知识点>
 
 ## 自测题（复习用）
 
 1. <5~9道覆盖核心概念的问答题，附提示>
+
+## 参考时间戳
+
+- [mm:ss] <关键节点>
 ```
 
-模板要点（以 JavaEE 第1讲笔记为范本，位于 `C:\Users\罗任\Desktop\JavaEE平台技术\课堂笔记-01-Spring与SpringBoot.md`）：
+模板要点（★ 数量语义、证据锚点规范、代码来源标注的完整定义以 `references/note-template.md` 为准）：
 
 - 按视频小节顺序组织，每节标注时长；
-- 重点内容用 ★ 标注数量区分优先级；
-- 代码块用课程真实代码，注明来自哪个子项目；
+- 要点用 `★数量 + 要点句 + [mm:ss]` 标注（★★★ 核心概念/必考点每讲 2~4 个；★★ 重要机制/易混淆点；★ 补充了解）；
+- 代码块用课程真实代码，注明来源（子项目 / 时刻 / 仓库文件）；
 - 概念对比用表格；
-- 结尾必有"知识地图"+"自测题"。
+- 结尾必有"知识地图"+"自测题"，可附"参考时间戳"附录。
 
 ## 常见问题
 
 | 现象 | 处理 |
 |---|---|
-| 所有分P都无字幕且 `sessdata_loaded:false` | 提示用户填写 config.json 的 SESSDATA（浏览器F12 → Application → Cookies → bilibili.com → SESSDATA），或直接走ASR |
+| 分P `subtitle_detail` 为 `api_empty` | 先提示用户填写 config.json 的 SESSDATA（浏览器F12 → Application → Cookies → bilibili.com → SESSDATA）后重跑一次 fetch；仍 `api_empty` 才直接走ASR |
 | playurl 下载失败/音频为空 | 可能是风控，重试一次；仍失败则改用 `yt-dlp` 下载音频后手动喂给 transcribe 的 transcribe 函数思路 |
 | faster-whisper 首次运行卡在下载 | 检查 HF_ENDPOINT 是否为 https://hf-mirror.com，或手动 `pip install -U huggingface_hub` |
-| 转写文本术语错乱 | 生成笔记时结合课程主题校正，代码类词汇对照仓库源码 |
+| 转写文本术语错乱 | 用 `references/asr-glossary.json` 对照校正；词表未覆盖的新错法按同样格式补进词表 `map`，下次自动生效 |
+| `subtitle_detail` 为 `error` | 看摘要里的 error 信息：视频可能已失效/被风控，重试一次或告知用户换视频 |
+| 转写质量差（长视频尤甚） | 先删对应 txt，再用 `--model medium` 重转；有 NVIDIA GPU 时脚本会自动用 CUDA float16，也可 `--device cuda` 强制 |
 | 抖音 detail 接口 403 / "无 aweme_detail" | 签名算法可能被抖音升级，参考 Evil0ctal/Douyin_TikTok_Download_API 或 JefferyHcool/BiliNote 更新 `abogus.py` / `WEB_SIGN_SALT`；另确认视频可公开访问（非私密/仅粉丝可见） |
 | 抖音视频下载中断/文件过小 | 下载地址有时效，重跑 douyin_fetch.py 重新解析即可（本地已有完整 mp4 会自动跳过下载） |
 | 环境缺依赖 | B站流程需 faster-whisper + av；抖音流程另需 `pip install gmssl` |
