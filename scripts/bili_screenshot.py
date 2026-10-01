@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""bilibili-notes 第三步（可选）：按转写稿时间戳抽取视频重点截图。
+"""bilibili-douyin-notes 第三步（可选）：按转写稿时间戳抽取视频重点截图。
 
 用法:
     python bili_screenshot.py <metadata.json路径> <转写txt所在目录> <截图输出目录>
@@ -11,6 +11,11 @@
     2. 通过 playurl API 下载该分P的 480p DASH 视频流（无需登录/ffmpeg）
     3. 用 PyAV（faster-whisper 已自带）定位时间点解码抽帧，存为 PNG
     4. 截图是否有效（非黑屏/转场）由调用方另行视觉校验
+
+平台差异:
+    - B站: 按需下载视频流，用完即删；锚点优先查硬编码 ANCHORS 表
+    - 抖音（metadata 带 media_path）: 直接复用 douyin_fetch.py 已下载的本地视频，
+      不再联网；无 ANCHORS 条目时自动用 auto_anchors() 从转写稿提取关键词
 
 stdout 每个分P输出一行 JSON 进度。
 """
@@ -27,7 +32,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CONFIG = Path(__file__).resolve().parent.parent / "config.json"
 
-# 锚点表: {页码: [(label, 中文说明, [正则...]), ...]}，每页最多取前几个命中项
+# 锚点表: {页码: [(label, 中文说明, [正则...]), ...]}，每页最多取前几个命中项。
+# 可选配置：表里没有的页码（或抖音等平台）会自动走 auto_anchors() 关键词提取。
 ANCHORS = {
     1: [("fenleijiaogou", "前后端分工与冰山比喻", ["冰山", "前端.*工程师|后端.*工程师"]),
         ("ai-frontend", "AI对前端的冲击", ["AI.*前端|前端.*AI|全栈"]),
@@ -114,6 +120,46 @@ def find_anchor_times(lines: list[tuple[float, str]], patterns: list[str]) -> fl
     return None
 
 
+# 自动锚点时排除的英文常见口语词
+_STOP_WORDS = {
+    "this", "that", "with", "from", "have", "what", "when", "your", "then",
+    "them", "they", "will", "would", "there", "these", "those", "which",
+    "about", "into", "just", "like", "make", "made", "need", "want", "here",
+    "very", "much", "more", "some", "time", "know", "think", "also",
+    "because", "video", "today", "start", "okay",
+}
+
+
+def auto_anchors(lines: list[tuple[float, str]], max_n: int = 3) -> list[tuple[str, str, float]]:
+    """无硬编码锚点时的兜底：提取转写稿里的英文/代码样关键词，取首次出现时间。
+
+    返回 [(label, caption, 抽帧秒), ...]，截图时间彼此至少错开15秒，避免扎堆。
+    """
+    from collections import Counter
+    cnt, first = Counter(), {}
+    for t, txt in lines:
+        for m in re.finditer(r"@[A-Za-z]\w+|[A-Za-z][A-Za-z0-9_]{3,}", txt):
+            tok = m.group(0)
+            cnt[tok] += 1
+            first.setdefault(tok, t)
+    cands = sorted(((c, tok) for tok, c in cnt.items()
+                    if tok.lower().lstrip("@") not in _STOP_WORDS),
+                   key=lambda x: (-x[0], -len(x[1])))
+    jobs, last_t = [], -999.0
+    for c, tok in cands:
+        if len(jobs) >= max_n:
+            break
+        label = re.sub(r"\W+", "-", tok.lstrip("@").lower()).strip("-")
+        if not label:
+            continue
+        t = max(2.0, first[tok] - 3.0)
+        if t - last_t < 15:
+            continue
+        jobs.append((label, f"关键词「{tok}」出现的画面", t))
+        last_t = t
+    return jobs
+
+
 def download_video(bvid: str, cid: int, dest: Path, cookie: str = "") -> Path:
     url = f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&fnval=16"
     data = json.loads(http_get(url, cookie).decode("utf-8"))
@@ -161,7 +207,7 @@ def main():
     cookie = load_sessdata()
 
     for p in meta["pages"]:
-        page_no, part, cid = p["page"], p["part"], p["cid"]
+        page_no, part, cid = p["page"], p["part"], p.get("cid")
         if only_pages and page_no not in only_pages:
             continue
         txt_file = txt_dir / f"{page_no:02d}_{safe_name(part)}.txt"
@@ -170,17 +216,23 @@ def main():
             continue
         lines = parse_ts_seconds(txt_file.read_text(encoding="utf-8"))
         jobs = []
-        for label, caption, patterns in ANCHORS.get(page_no, []):
-            t = find_anchor_times(lines, patterns)
-            if t is not None:
-                jobs.append((label, caption, t))
+        if page_no in ANCHORS:
+            for label, caption, patterns in ANCHORS[page_no]:
+                t = find_anchor_times(lines, patterns)
+                if t is not None:
+                    jobs.append((label, caption, t))
+        if not jobs:  # 无硬编码锚点（如抖音平台）时自动提取
+            jobs = auto_anchors(lines)
         if not jobs:
             print(json.dumps({"page": page_no, "status": "no_anchor"}), flush=True)
             continue
 
-        video = img_dir / f".video_{page_no:02d}.m4s"
+        local_media = p.get("media_path") and (meta_path.parent / p["media_path"])
+        video = local_media if (local_media and local_media.exists()) \
+            else img_dir / f".video_{page_no:02d}.m4s"
         try:
-            download_video(meta["bvid"], cid, video, cookie)
+            if video is not local_media:
+                download_video(meta["bvid"], cid, video, cookie)
             times = [t for _, _, t in jobs]
             frames = grab_frames(video, times)
             results = []
@@ -196,7 +248,8 @@ def main():
             print(json.dumps({"page": page_no, "status": "error", "error": str(e)},
                              ensure_ascii=False), flush=True)
         finally:
-            video.unlink(missing_ok=True)
+            if video is not local_media:
+                video.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

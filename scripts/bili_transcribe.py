@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""bilibili-notes 第二步（ASR兜底）：视频无官方字幕时，下载音频并用 faster-whisper 转写。
+"""bilibili-douyin-notes 第二步（ASR兜底）：视频无官方字幕时，下载音频并用 faster-whisper 转写。
 
 用法:
     python bili_transcribe.py <metadata.json路径> [--page 页码] [--model 模型] [--lang 语言]
@@ -8,6 +8,8 @@
 说明:
     - 页码对应 metadata.json 中 pages[].page（1开始）；不传则转写所有尚无文本的分P
     - 音频通过B站 playurl API 直接下载（64kbps，无需 ffmpeg/yt-dlp）
+    - 兼容抖音 metadata（douyin_fetch.py 生成）：分P带 media_path 时直接用本地
+      视频文件（faster-whisper 经 PyAV 可直接解码 mp4 音轨，无需抽轨）
     - 模型默认 small；首次运行会从 HF（已默认走 hf-mirror.com）下载模型
       tiny≈75MB / base≈145MB / small≈480MB / medium≈1.5GB，CPU 用 int8
     - 输出: <输出目录>/<页码>_<分P名>.txt（[mm:ss] 时间戳格式）
@@ -121,7 +123,10 @@ def main():
         out_file = outdir / f"{p['page']:02d}_{safe_name(p['part'])}.txt"
         audio = outdir / f".audio_{p['page']:02d}.m4s"
         try:
-            download_audio(meta["bvid"], p["cid"], audio, cookie)
+            if p.get("media_path"):  # 抖音等平台：视频已在本地
+                audio = outdir / p["media_path"]
+            else:
+                download_audio(meta["bvid"], p["cid"], audio, cookie)
             text = transcribe(audio, args.model, lang)
             out_file.write_text(text, encoding="utf-8")
             print(json.dumps({"page": p["page"], "part": p["part"],
@@ -132,7 +137,8 @@ def main():
                               "status": "error", "error": str(e)},
                              ensure_ascii=False), flush=True)
         finally:
-            audio.unlink(missing_ok=True)
+            if str(audio) == str(outdir / f".audio_{p['page']:02d}.m4s"):
+                audio.unlink(missing_ok=True)  # 仅清理临时下载的音频，保留平台视频缓存
 
 
 if __name__ == "__main__":
