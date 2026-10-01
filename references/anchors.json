@@ -1,0 +1,84 @@
+{
+  "1": [
+    ["fenleijiaogou", "前后端分工与冰山比喻", ["冰山", "前端.*工程师|后端.*工程师"]],
+    ["ai-frontend", "AI对前端的冲击", ["AI.*前端|前端.*AI|全栈"]],
+    ["ai-quanstack", "全栈工程师趋势", ["全栈"]]
+  ],
+  "2": [
+    ["j2ee-history", "J2EE到JavaEE的课程沿革", ["J2EE|Y211|加瓦一"]],
+    ["tomcat-netty", "两大技术栈Tomcat与Netty", ["Tomcat|Netty|Latty"]],
+    ["reactive-quanxian", "Reactive判断权限例子", ["全线|权限|角色"]]
+  ],
+  "3": [
+    ["three-features", "Spring三大特性", ["三大|控制反转.*依赖注入|IOC|IoC"]],
+    ["static-oop", "静态方法不是面向对象", ["静态"]],
+    ["simplejava", "SimpleJava组装代码", ["SimpleJava|Simple|new"]]
+  ],
+  "4": [
+    ["git-clone", "IDEA克隆仓库", ["克龙|Clone|clone"]],
+    ["git-install", "git安装与配置", ["windows.*git|Git|git"]]
+  ],
+  "5": [
+    ["maven-idea", "IDEA内置Maven", ["Maven|maven"]],
+    ["add-maven", "Add as Maven Project", ["add as maven|Add as Maven|import"]]
+  ],
+  "6": [
+    ["component", "@Component注解方式", ["art component|[Cc]omponent"]],
+    ["qualifier", "@Qualifier指定注入", ["Qualifier|qualify|quali"]],
+    ["lombok", "Lombok生成构造函数", ["Lombok|lombok|plug"]]
+  ],
+  "7": [
+    ["jdk-setting", "项目JDK设置", ["Project Structure|project structure|JDK"]],
+    ["delete-jdk", "删掉外部JDK", ["删|清除|清理"]]
+  ],
+  "8": [
+    ["maven-dir", "Maven标准目录", ["src|SRC|目录"]],
+    ["m2-repo", "本地仓库m2", ["m2|M2|仓库"]]
+  ],
+  "9": [
+    ["lifecycle3", "三个生命周期", ["生命周期|life"]],
+    ["compile-target", "compile生成target", ["target|class|comp"]],
+    ["package", "打包package", ["package|包"]]
+  ],
+  "10": [
+    ["plugin", "插件机制", ["插件|plug"]],
+    ["run-goal", "spring-boot:run运行", ["run|goal|目标"]],
+    ["started", "Started启动成功标志", ["Started|started|seconds"]]
+  ],
+  "11": [
+    ["embed-tomcat", "内嵌Tomcat", ["Tomcat|war|挖包|哇包|哇巴"]],
+    ["starter", "Starter起步依赖", ["Stutter|[Ss]tarter"]],
+    ["deps-view", "依赖展开视图", ["Dependencies|Dependence|依赖"]]
+  ],
+  "12": [
+    ["actuator", "Actuator监控", ["actuator|Accurate|accurate"]],
+    ["beans-endpoint", "beans端点看容器", ["beans|兵队下|冰对象"]],
+    ["metrics", "metrics监控指标", ["metrics|matrix|内存"]]
+  ],
+  "13": [
+    ["beanfactory", "BeanFactory继承体系", ["BeanFactory|BinFacture|bingfactory|Bin Factory"]],
+    ["appcontext", "ApplicationContext四特性", ["Application Context|ApplicationContacts|ApplicationContext|上下文"]],
+    ["i18n-feature", "国际化特性", ["国际|语言"]]
+  ],
+  "14": [
+    ["lifecycle-map", "生命周期全景图", ["生命"]],
+    ["aware", "Aware接口", ["Aware|aware|awell|奥特瓦德"]],
+    ["prop-set", "afterPropertiesSet", ["property set|propertyset|propertysset|properties"]]
+  ],
+  "15": [
+    ["no-sysout", "禁用System.out.println", ["print line|printline|System"]],
+    ["slf4j", "SLF4J门面", ["facade|佛界|slf|SLF|搬运工"]],
+    ["log4j", "log4j漏洞案例", ["漏洞|log4j|log 4j"]]
+  ],
+  "16": [
+    ["loop-dep", "循环依赖问题", ["循环依赖|循环"]],
+    ["build-order", "实例化顺序", ["顺序|先.*构建|依赖.*关系"]],
+    ["log-level", "日志级别切换", ["debug|级别|忘的级别|warn"]]
+  ],
+  "17": [
+    ["logback-xml", "logback.xml配置", ["logback|Logback|xml"]],
+    ["i18n-files", "i18n资源文件", ["messages|message|bundle|国际"]],
+    ["java-go", "Java与Go竞争", ["Go|购语言|购语|原生"]],
+    ["ali-aot", "阿里AOT实测", ["阿里|原生代码"]]
+  ]
+}
