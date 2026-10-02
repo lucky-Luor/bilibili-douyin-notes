@@ -22,6 +22,8 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -41,17 +43,33 @@ def load_sessdata() -> str:
         return ""
 
 
-def http_get(url: str, cookie: str = "") -> bytes:
+def http_get(url: str, cookie: str = "", retries: int = 3) -> bytes:
+    """带重试的 GET：网络类错误按 1s/2s 退避重试，与 bili_fetch 侧对称。"""
     headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
     if cookie:
         headers["Cookie"] = f"SESSDATA={cookie}"
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return resp.read()
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read()
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            last_exc = e
+            if attempt < retries - 1:
+                time.sleep(attempt + 1)
+    raise last_exc
 
 
 def safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip()[:60]
+
+
+def atomic_write_text(path: Path, text: str):
+    """先写 .tmp 临时文件再 os.replace，避免中断留下半个文件。"""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def download_audio(bvid: str, cid: int, dest: Path, cookie: str = "") -> Path:
@@ -95,7 +113,10 @@ def detect_device(device: str) -> str:
 
 
 def transcribe(audio_path: Path, model_size: str, lang: str | None,
-               device: str = "auto") -> str:
+               device: str = "auto", backend: str = "faster-whisper") -> str:
+    if backend != "faster-whisper":
+        raise NotImplementedError(
+            f"暂不支持的 ASR 后端: {backend}（当前仅实现 faster-whisper）")
     if model_cached(model_size):
         os.environ["HF_HUB_OFFLINE"] = "1"
     from faster_whisper import WhisperModel
@@ -111,6 +132,12 @@ def transcribe(audio_path: Path, model_size: str, lang: str | None,
     lines = [f"[{int(s.start) // 60:02d}:{int(s.start) % 60:02d}] {s.text.strip()}"
              for s in segments if s.text.strip()]
     return "\n".join(lines)
+
+
+def txt_done(outdir: Path, page: dict) -> bool:
+    """转写完成标记：文本文件存在且 >=100 字节（更小的视为上次中断的残片）。"""
+    f = outdir / f"{page['page']:02d}_{safe_name(page['part'])}.txt"
+    return f.exists() and f.stat().st_size >= 100
 
 
 def main():
@@ -130,13 +157,9 @@ def main():
     cookie = load_sessdata()
     lang = None if args.lang == "auto" else args.lang
 
-    # 已有字幕文本的分P视为完成，跳过
-    def done(p) -> bool:
-        f = outdir / f"{p['page']:02d}_{safe_name(p['part'])}.txt"
-        return f.exists() and f.stat().st_size > 0
-
+    # 已有字幕文本（>=100 字节）的分P视为完成，跳过
     targets = [p for p in meta["pages"]
-               if (args.page == 0 or p["page"] == args.page) and not done(p)]
+               if (args.page == 0 or p["page"] == args.page) and not txt_done(outdir, p)]
     if not targets:
         print(json.dumps({"status": "nothing_to_do"}, ensure_ascii=False))
         return
@@ -150,7 +173,7 @@ def main():
             else:
                 download_audio(meta["bvid"], p["cid"], audio, cookie)
             text = transcribe(audio, args.model, lang, args.device)
-            out_file.write_text(text, encoding="utf-8")
+            atomic_write_text(out_file, text)
             print(json.dumps({"page": p["page"], "part": p["part"],
                               "file": str(out_file), "chars": len(text),
                               "device": detect_device(args.device),
