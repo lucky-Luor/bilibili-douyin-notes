@@ -1,0 +1,2 @@
+# 开发/测试依赖（tests/ 全部离线可跑，无需 faster-whisper / av / gmssl）
+pytest

@@ -1,0 +1,11 @@
+# bilibili-douyin-notes 运行时依赖
+# 按需安装（脚本均为惰性 import，不用的组件不装也不影响其他流程）：
+#   B站笔记流程（第1~3步）: faster-whisper av numpy pillow
+#   抖音流程（第1步）:      gmssl
+#   截图画质初筛:           numpy pillow
+# 开发/测试依赖见 requirements-dev.txt
+faster-whisper
+av
+numpy
+gmssl
+pillow
