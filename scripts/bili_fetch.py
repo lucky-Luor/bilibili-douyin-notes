@@ -4,6 +4,7 @@
 
 用法:
     python bili_fetch.py <视频链接或BV号> [输出目录]
+    python bili_fetch.py --probe <视频链接或BV号>   # 只探元数据（不抓字幕/不写文件）
 
 输出:
     <输出目录>/metadata.json   视频元数据（标题、UP主、分P列表等）
@@ -12,12 +13,14 @@
 
 字幕三态（每个分P的 subtitle_detail 字段）:
     cc / ai       拿到字幕（subtitle=true）
-    none          接口正常返回但确实没有字幕 → 走 ASR，不用再折腾
-    api_empty     接口返回了字幕条目但 URL 全为空（/x/player/v2 对部分视频
+    api_empty     任一接口出现了字幕轨但全无可用 URL（/x/player/v2 对部分视频
                   只给元信息不给 URL 的已知问题，已自动尝试 wbi/v2 兜底）
                   → 提示用户填 SESSDATA 后重跑，仍失败再走 ASR
+    none          所有字幕接口都完全没有字幕轨 → 确实无字幕，直接走 ASR，
+                  不必提示 SESSDATA
 """
 import json
+import os
 import re
 import sys
 import time
@@ -87,24 +90,59 @@ def subtitle_to_text(sub_json: dict) -> str:
                      for it in sub_json.get("body", []))
 
 
-def fetch_subtitles(bvid: str, cid: int, cookie: str) -> list:
-    """依次尝试 player/v2 与 player/wbi/v2，返回过滤掉空URL后的字幕条目。
+def atomic_write_text(path: Path, text: str):
+    """先写 .tmp 临时文件再 os.replace，避免中断留下半个文件。"""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def fetch_subtitles(bvid: str, cid: int, cookie: str) -> tuple[list, bool]:
+    """依次尝试 player/v2 与 player/wbi/v2，返回 (可用字幕条目, 是否出现过字幕轨)。
 
     /x/player/v2 对大量视频只返回 ai-zh 元信息而 subtitle_url 为空（已知问题），
     wbi/v2 是实测更可能给出真实 URL 的兜底接口。
+
+    返回值语义（调用方据此三态分发）:
+        usable 非空           -> 有可用字幕 URL，直接走字幕
+        usable 空 & saw_track -> 有字幕轨但全无可用 URL（api_empty，
+                                 多半是 SESSDATA 过期/无权限，值得提示填写）
+        usable 空 & 无轨      -> 所有接口都完全没有字幕轨（none，直接走 ASR）
+    单个接口异常/失败视为"未探测到"，continue 尝试下一个接口，不算 none 的依据；
+    只要任一接口出现了字幕轨（哪怕无可用 URL），saw_track 即为 True。
     """
-    subs: list = []
+    usable: list = []
+    saw_track = False
     for path in ("x/player/v2", "x/player/wbi/v2"):
         try:
             player = api(f"https://api.bilibili.com/{path}?bvid={bvid}&cid={cid}", cookie)
-            subs = (player.get("data") or {}).get("subtitle", {}).get("subtitles", []) or []
         except Exception:
-            subs = []
-        # 过滤空 URL：有 URL 的条目才可用；两个接口取并集中第一个有效来源
+            continue  # 接口异常不置 saw_track，也不算"确认无字幕"
+        subs = (player.get("data") or {}).get("subtitle", {}).get("subtitles", []) or []
+        if subs:
+            saw_track = True
+        # 过滤空 URL：有 URL 的条目才可用；取第一个给出可用字幕的接口
         usable = [s for s in subs if (s.get("subtitle_url") or "").strip()]
         if usable:
-            return usable
-    return []
+            return usable, True
+    return [], saw_track
+
+
+def probe(bvid: str):
+    """--probe 模式：只调 view 接口拿元数据并输出 JSON，不抓字幕、不建目录、不写文件。"""
+    info = api(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}")["data"]
+    pages = [{"page": p["page"], "part": p["part"], "cid": p["cid"],
+              "duration": p["duration"]} for p in info["pages"]]
+    total = info.get("duration") or sum(p["duration"] for p in pages)
+    print(json.dumps({
+        "bvid": bvid,
+        "title": info["title"],
+        "owner": info["owner"]["name"],
+        "pages": pages,
+        "duration": total,
+        # faster-whisper CPU int8 转写约为音频时长的 2 倍（实测经验值）
+        "estimated_asr_minutes": round(total * 2 / 60, 1),
+    }, ensure_ascii=False))
 
 
 def pick_subtitle(subtitles: list) -> dict | None:
@@ -122,13 +160,19 @@ def safe_name(name: str) -> str:
 
 
 def main():
-    if len(sys.argv) < 2:
+    argv = [a for a in sys.argv[1:] if a != "--probe"]
+    probe_only = len(argv) != len(sys.argv) - 1
+    if not argv:
         raise SystemExit(__doc__)
-    source = sys.argv[1]
+    source = argv[0]
     sessdata = load_sessdata()
 
     bvid = extract_bvid(source)
-    outdir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(f"bili-notes-{bvid}")
+    if probe_only:  # 只探元数据：不建输出目录、不写任何文件
+        probe(bvid)
+        return
+
+    outdir = Path(argv[1]) if len(argv) > 1 else Path(f"bili-notes-{bvid}")
     outdir.mkdir(parents=True, exist_ok=True)
 
     info = api(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}")["data"]
@@ -144,7 +188,7 @@ def main():
                    "duration": p["duration"]} for p in pages],
     }
     meta_path = outdir / "metadata.json"
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
     report = {"bvid": bvid, "title": meta["title"], "owner": meta["owner"],
               "outdir": str(outdir), "sessdata_loaded": bool(sessdata), "pages": []}
@@ -154,16 +198,17 @@ def main():
         entry = {"page": page_no, "part": part, "cid": cid,
                  "subtitle": False, "subtitle_detail": "none"}
         try:
-            subs = fetch_subtitles(bvid, cid, sessdata)
+            subs, saw_track = fetch_subtitles(bvid, cid, sessdata)
             if subs:
                 sub = pick_subtitle(subs)
                 sub_url = sub["subtitle_url"]
                 if sub_url.startswith("//"):
                     sub_url = "https:" + sub_url
+                entry["subtitle_url"] = sub_url
                 text = subtitle_to_text(json.loads(http_get(sub_url, sessdata).decode("utf-8")))
                 if text.strip():
                     fname = f"{page_no:02d}_{safe_name(part)}.txt"
-                    (outdir / fname).write_text(text, encoding="utf-8")
+                    atomic_write_text(outdir / fname, text)
                     lan = sub.get("lan", "")
                     is_ai = bool(sub.get("ai_type")) or lan.startswith("ai")
                     entry.update(subtitle=True, lan=lan, ai=is_ai,
@@ -171,11 +216,22 @@ def main():
                 else:
                     entry["subtitle_detail"] = "api_empty"  # 字幕内容体为空
             else:
-                entry["subtitle_detail"] = "api_empty"  # 两个接口都没给可用URL
+                # 有字幕轨但全无可用URL -> api_empty（SESSDATA 过期/无权限的典型症状）；
+                # 所有接口都完全没有字幕轨 -> none，直接走 ASR，不必折腾 SESSDATA
+                entry["subtitle_detail"] = "api_empty" if saw_track else "none"
         except Exception as e:  # 单个分P失败不阻塞整体
             entry["subtitle_detail"] = "error"
             entry["error"] = str(e)
         report["pages"].append(entry)
+
+    # 字幕详情回写进 metadata.json 的 pages[]，供后续步骤直接读取（不依赖 stdout 解析）
+    by_page = {e["page"]: e for e in report["pages"]}
+    for mp in meta["pages"]:
+        e = by_page.get(mp["page"], {})
+        mp["subtitle_detail"] = e.get("subtitle_detail")
+        mp["subtitle_lang"] = e.get("lan")
+        mp["subtitle_url"] = e.get("subtitle_url")
+    atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
     print(json.dumps(report, ensure_ascii=False))
 
