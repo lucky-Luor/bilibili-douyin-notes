@@ -12,12 +12,14 @@
     - 单段超过 budget 时独立成块（允许超预算，不截断内容）。
 
 输出:
-    <outdir>/<原文件名>.chunk-01.txt ... （outdir 默认为源文件同目录的 chunks/）
+    <outdir>/<原文件名>.chunk-01.txt ... （outdir 默认为源文件同目录的 chunks/，
+    每个文件原子写入：先写 .tmp 再 os.replace 落盘，避免半截文件）
     stdout 打印 JSON 摘要: {"n_chunks": N, "files": [...], "chunks": [{"file","chars"}...]}
     （chars 为该块内容字符数，不含换行）
 """
 import argparse
 import json
+import os
 from pathlib import Path
 
 
@@ -66,7 +68,9 @@ def main():
     summary = []
     for i, chunk in enumerate(chunks, 1):
         out = outdir / f"{src.stem}.chunk-{i:02d}.txt"
-        out.write_text("\n".join(chunk) + "\n", encoding="utf-8")
+        tmp = out.with_name(out.name + ".tmp")
+        tmp.write_text("\n".join(chunk) + "\n", encoding="utf-8")
+        os.replace(tmp, out)  # 原子写：.tmp → os.replace，避免中断留下半截文件
         summary.append({"file": str(out), "chars": sum(len(x) for x in chunk)})
 
     print(json.dumps({"n_chunks": len(chunks),
