@@ -10,7 +10,8 @@
 
 输出（与 bili_fetch.py 同一份 metadata.json 约定，方便共用第二/三步脚本）:
     <输出目录>/metadata.json   平台/标题/作者/时长/分P列表（page=1, media_path=本地视频）
-    <输出目录>/media_p01.mp4   无水印视频（已存在且>1MB 时跳过下载，直接复用）
+    <输出目录>/media_p01.mp4   无水印视频（已存在且>1MB 且无 .part 残片时跳过下载，
+                               直接复用；下载先写 .part 临时文件，完成后原子替换）
     stdout 最后一行输出 JSON 摘要（供调用方解析），进度信息走 stderr
 
 原理（全部游客身份，无需登录、无需用户 Cookie）:
@@ -31,6 +32,7 @@
 import hashlib
 import http.client
 import json
+import os
 import random
 import re
 import secrets
@@ -74,9 +76,9 @@ def http(url, data=None, headers=None, method=None):
 def extract_video_id(text: str) -> str:
     """从链接/分享口令文本中解析 19 位左右的 aweme_id。"""
     m = re.search(r"https?://v\.douyin\.com/[\w-]+", text)
-    if m:  # 短链：跟随 302 重定向
+    if m:  # 短链：跟随 302 重定向（与主请求共用 _OPENER，保持代理/UA 一致）
         req = urllib.request.Request(m.group(0), headers={"User-Agent": UA})
-        text = urllib.request.urlopen(req, timeout=30).geturl()
+        text = _OPENER.open(req, timeout=30).geturl()
     m = re.search(r"(?:video/|aweme_id=|/note/)(\d{15,})", text) or \
         re.search(r"^(\d{15,})$", text.strip())
     if m:
@@ -195,15 +197,32 @@ def pick_video_url(detail: dict):
     raise RuntimeError("detail 里没有视频下载地址")
 
 
+# 图集/图文类 aweme_type：68=图集(多图)，150=图文
+ALBUM_AWEME_TYPES = {68, 150}
+
+
+def check_not_album(detail: dict):
+    """图集/图文帖直接退出（人话提示，不 traceback）：本工具只处理视频。"""
+    images = detail.get("images") or []
+    video = detail.get("video") or {}
+    has_video_addr = bool((video.get("play_addr") or {}).get("url_list")
+                          or (video.get("download_addr") or {}).get("url_list"))
+    if (images and not has_video_addr) or detail.get("aweme_type") in ALBUM_AWEME_TYPES:
+        raise SystemExit("这是图集帖（图文），本工具只处理视频，请换一个视频链接再试。")
+
+
 def download(url: str, dest: Path) -> int:
+    """先写 .part 临时文件，下载完成后原子替换为正式文件名（中断不产生半个正式文件）。"""
+    part = dest.with_name(dest.name + ".part")
     log(f"[3] downloading -> {dest.name}")
     n = 0
     resp = http(url, headers={"User-Agent": UA, "Referer": "https://www.douyin.com/"})
-    with open(dest, "wb") as f:
+    with open(part, "wb") as f:
         while chunk := resp.read(1 << 16):
             f.write(chunk)
             n += len(chunk)
     resp.close()
+    os.replace(part, dest)
     return n
 
 
@@ -220,11 +239,17 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     detail = fetch_aweme_detail(aweme_id)
+    check_not_album(detail)
     title = (detail.get("desc") or detail.get("item_title") or "抖音视频").strip()
     owner = detail.get("author", {}).get("nickname", "")
     duration_ms = detail.get("video", {}).get("duration") or 0
 
     media = outdir / "media_p01.mp4"
+    part = outdir / "media_p01.mp4.part"
+    if part.exists():
+        # .part 残留说明上次下载中断：删残片重新下载，不复用残片也不复用旧缓存
+        log("[3] 发现上次中断的 .part 残片，删除后重新下载")
+        part.unlink()
     if media.exists() and media.stat().st_size > 1024 * 1024:
         log("[3] 本地已有缓存视频，跳过下载")
     else:
