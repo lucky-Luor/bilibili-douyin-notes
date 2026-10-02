@@ -3,7 +3,11 @@
 """bilibili-douyin-notes 第三步（可选）：按转写稿时间戳抽取视频重点截图。
 
 用法:
-    python bili_screenshot.py <metadata.json路径> <转写txt所在目录> <截图输出目录> [页码,页码]
+    python bili_screenshot.py <metadata.json路径> <转写txt所在目录> <截图输出目录> [页码,页码] [--ascii-names]
+
+选项:
+    --ascii-names  把中文锚点 label 转写为 zh-<md5(关键词)前6位>，文件名全 ASCII
+                   （英文 label 不变）；默认关闭，保留中文文件名。
 
 原理:
     1. 对每个分P，在转写稿中搜索"锚点关键词"（如 @Component、循环依赖、log4j），
@@ -12,15 +16,19 @@
        该文件不存在或该页无条目时，自动用 auto_anchors() 从转写稿提取中英文关键词。
     2. 通过 playurl API 下载该分P的 480p DASH 视频流（无需登录/ffmpeg）
     3. 用 PyAV（faster-whisper 已自带）定位时间点解码抽帧，存为 PNG
-    4. 本地质检（QC）：每帧计算平均亮度（<18 判 dark，>240 判 bright）与
-       灰度拉普拉斯方差清晰度（<10 判 blurry）；判为非 ok 的帧自动在 +30s
+    4. 本地质检（QC）：按像素占比判亮度（近黑像素占比>97% 判 dark，
+       近白像素占比>98.5% 判 bright——白底 PPT 少量文字不会误判）与灰度
+       拉普拉斯方差清晰度（<10 判 blurry）；判为非 ok 的帧自动在 +30s
        重抽一次（仍在该分P时长内才重试），重抽后仍非 ok 则保留该帧并标记 qc。
+       numpy 未安装时跳过初筛（qc="skipped"），流程继续。
        本地初筛只是自动兜底，最终复核由调用方（Agent）视觉完成。
+    5. 运行结束把全部截图元数据写入 <img_dir>/manifest.json（跨分P累积、
+       同页重跑时该页旧记录覆盖），供 validate_note.py 交叉校验图注与画面。
 
 输出契约:
     stdout 每个分P输出一行 JSON 进度：
-        {"page":.., "part":.., "frames":[{"file","caption","t","qc"}],
-         "failed":[{"label","t"}], "status":"ok"|"partial"|...}
+        {"page":.., "part":.., "frames":[{"file","page","label","caption","t","qc"}],
+         "failed":[{"page","label","t"}], "status":"ok"|"partial"|...}
     frames 与锚点一一对应，任一帧取不到（None）时该锚点不生成 png、
     进入 failed 列表，其余截图的图注不受影响；全部成功 status=ok，
     有失败帧 status=partial。
@@ -30,10 +38,14 @@
     - 抖音（metadata 带 media_path）: 直接复用 douyin_fetch.py 已下载的本地视频，
       不再联网；无锚点条目时自动用 auto_anchors() 从转写稿提取关键词
 """
+import argparse
+import hashlib
 import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -44,11 +56,12 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 CONFIG = Path(__file__).resolve().parent.parent / "config.json"
 ANCHORS_PATH = Path(__file__).resolve().parent.parent / "references" / "anchors.json"
 
-# QC 阈值与重抽间隔
-QC_DARK = 18.0      # 平均亮度低于此 → dark
-QC_BRIGHT = 240.0   # 平均亮度高于此 → bright
-QC_BLURRY = 10.0    # 灰度拉普拉斯方差低于此 → blurry
+# QC 阈值与重抽间隔（亮度用像素占比法，避免白底PPT被误判为空屏）
+QC_DARK_FRAC = 0.97    # 近黑像素（灰度<25）占比高于此 → dark
+QC_WHITE_FRAC = 0.985  # 近白像素（灰度>=250）占比高于此 → bright（真正空屏）
+QC_BLURRY = 10.0       # 灰度拉普拉斯方差低于此 → blurry
 QC_RETRY_AFTER = 30.0  # QC 不过时向后重抽的秒数
+HTTP_RETRIES = 3       # http_get 网络类错误重试次数（1s/2s 退避）
 
 
 def load_anchors() -> dict[int, list]:
@@ -67,13 +80,22 @@ def load_sessdata() -> str:
         return ""
 
 
-def http_get(url: str, cookie: str = "") -> bytes:
+def http_get(url: str, cookie: str = "", retries: int = HTTP_RETRIES) -> bytes:
+    """带重试的 GET：网络类错误按 1s/2s 退避重试（与 bili_fetch.py 相同模式）。"""
     headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
     if cookie:
         headers["Cookie"] = f"SESSDATA={cookie}"
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return resp.read()
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read()
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            last_exc = e
+            if attempt < retries - 1:
+                time.sleep(attempt + 1)
+    raise last_exc
 
 
 def parse_ts_seconds(text: str) -> list[tuple[float, str]]:
@@ -178,7 +200,16 @@ def auto_anchors(lines: list[tuple[float, str]], max_n: int = 3) -> list[tuple[s
 def download_video(bvid: str, cid: int, dest: Path, cookie: str = "") -> Path:
     url = f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&fnval=16"
     data = json.loads(http_get(url, cookie).decode("utf-8"))
-    videos = data["data"]["dash"]["video"]
+    if data.get("code") != 0:  # 失效视频/风控/需要登录等，给出可读报错而非裸 KeyError
+        raise RuntimeError(
+            f"playurl API 返回 code={data.get('code')}: "
+            f"{data.get('message') or data.get('msg') or '未知错误'}（视频可能已失效、需要登录或风控拦截）")
+    try:
+        videos = data["data"]["dash"]["video"]
+    except (KeyError, TypeError) as e:
+        raise RuntimeError(
+            f"playurl 响应缺少 dash.video 字段（bvid={bvid} cid={cid}，"
+            "可能未登录无 DASH 流权限）") from e
     best = max(videos, key=lambda v: v["id"])  # 未登录最高480p
     req = urllib.request.Request(best["baseUrl"] or best["base_url"], headers={
         "User-Agent": UA, "Referer": "https://www.bilibili.com/",
@@ -214,19 +245,27 @@ def grab_frames(video: Path, times: list[float]) -> list:
 
 
 def qc_check(img) -> str:
-    """本地初筛一帧：返回 "ok" | "dark" | "bright" | "blurry"。
+    """本地初筛一帧：返回 "ok" | "dark" | "bright" | "blurry" | "skipped"。
 
-    亮度 = 灰度均值；清晰度 = 灰度图拉普拉斯（3x3 卷积核）方差，纯 numpy 计算。
-    亮度不达标优先判定（黑屏/白屏时清晰度无意义）。
+    亮度用像素占比法：近黑像素（灰度<25）占比、近白像素（灰度>=250）占比，
+    纯白空屏近白占比≈100% 判 bright，白底PPT（文字占比<8%）近白占比≈95%
+    仍判 ok——均值法（>240）会把后者误判。清晰度 = 灰度图拉普拉斯
+    （3x3 卷积核）方差，纯 numpy 计算。亮度不达标优先判定（黑屏/白屏时
+    清晰度无意义）。numpy 未安装时返回 "skipped"，不阻塞流程。
     """
-    import numpy as np
+    try:
+        import numpy as np
+    except ImportError:
+        print("warning: numpy 未安装，跳过画质初筛", file=sys.stderr)
+        return "skipped"
     g = np.asarray(img.convert("L"), dtype=np.float64)
     if g.shape[0] < 3 or g.shape[1] < 3:
         return "ok"
-    mean = float(g.mean())
-    if mean < QC_DARK:
+    dark_frac = float((g < 25).mean())
+    white_frac = float((g >= 250).mean())
+    if dark_frac > QC_DARK_FRAC:
         return "dark"
-    if mean > QC_BRIGHT:
+    if white_frac > QC_WHITE_FRAC:
         return "bright"
     lap = (-4.0 * g[1:-1, 1:-1]
            + g[:-2, 1:-1] + g[2:, 1:-1]
@@ -238,73 +277,120 @@ def safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip()[:60]
 
 
-def main():
-    if len(sys.argv) < 4:
-        raise SystemExit(__doc__)
-    meta_path, txt_dir, img_dir = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
-    only_pages = ({int(x) for x in sys.argv[4].split(",")}
-                  if len(sys.argv) > 4 else None)
+def ascii_label(label: str) -> str:
+    """--ascii-names 开启时：含非 ASCII 字符的 label 转为 zh-<md5(关键词)前6位>。"""
+    if label.isascii():
+        return label
+    return "zh-" + hashlib.md5(label.encode("utf-8")).hexdigest()[:6]
+
+
+def parse_args(argv=None):
+    ap = argparse.ArgumentParser(
+        description="按转写稿时间戳抽取B站/抖音视频重点截图",
+        epilog="示例: python bili_screenshot.py meta.json txt img 2,6,11 --ascii-names")
+    ap.add_argument("meta", type=Path, help="metadata.json 路径")
+    ap.add_argument("txt_dir", type=Path, help="转写txt所在目录")
+    ap.add_argument("img_dir", type=Path, help="截图输出目录")
+    ap.add_argument("pages", nargs="?", default=None,
+                    help="可选页码列表，逗号分隔，如 2,6,11（缺省处理全部分P）")
+    ap.add_argument("--ascii-names", action="store_true",
+                    help="中文锚点label转写为 zh-<md5前6位>，文件名全ASCII（默认保留中文）")
+    return ap.parse_args(argv)
+
+
+def write_manifest(img_dir: Path, frames: list, failed: list, touched: set):
+    """把截图元数据落盘 manifest.json：本次处理的页覆盖旧记录，未触及的页保留。"""
+    mpath = img_dir / "manifest.json"
+    old_frames, old_failed = [], []
+    if mpath.exists():
+        try:
+            old = json.loads(mpath.read_text(encoding="utf-8"))
+            old_frames = [f for f in old.get("frames", []) if f.get("page") not in touched]
+            old_failed = [f for f in old.get("failed", []) if f.get("page") not in touched]
+        except Exception:
+            old_frames, old_failed = [], []
+    manifest = {"frames": old_frames + frames, "failed": old_failed + failed}
+    mpath.write_text(json.dumps(manifest, ensure_ascii=False, indent=2),
+                     encoding="utf-8")
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    meta_path, txt_dir, img_dir = args.meta, args.txt_dir, args.img_dir
+    only_pages = ({int(x) for x in args.pages.split(",")}
+                  if args.pages else None)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     img_dir.mkdir(parents=True, exist_ok=True)
     cookie = load_sessdata()
     anchors = load_anchors()
+    all_frames, all_failed, touched_pages = [], [], set()
 
-    for p in meta["pages"]:
-        page_no, part, cid = p["page"], p["part"], p.get("cid")
-        if only_pages and page_no not in only_pages:
-            continue
-        txt_file = txt_dir / f"{page_no:02d}_{safe_name(part)}.txt"
-        if not txt_file.exists():
-            print(json.dumps({"page": page_no, "status": "no_transcript"}), flush=True)
-            continue
-        lines = parse_ts_seconds(txt_file.read_text(encoding="utf-8"))
-        jobs = []
-        for label, caption, patterns in anchors.get(page_no, []):
-            t = find_anchor_times(lines, patterns)
-            if t is not None:
-                jobs.append((label, caption, t))
-        if not jobs:  # 无锚点表条目（如抖音平台）时自动提取
-            jobs = auto_anchors(lines)
-        if not jobs:
-            print(json.dumps({"page": page_no, "status": "no_anchor"}), flush=True)
-            continue
+    try:
+        for p in meta["pages"]:
+            page_no, part, cid = p["page"], p["part"], p.get("cid")
+            if only_pages and page_no not in only_pages:
+                continue
+            txt_file = txt_dir / f"{page_no:02d}_{safe_name(part)}.txt"
+            if not txt_file.exists():
+                print(json.dumps({"page": page_no, "status": "no_transcript"}), flush=True)
+                continue
+            lines = parse_ts_seconds(txt_file.read_text(encoding="utf-8"))
+            jobs = []
+            for label, caption, patterns in anchors.get(page_no, []):
+                t = find_anchor_times(lines, patterns)
+                if t is not None:
+                    jobs.append((label, caption, t))
+            if not jobs:  # 无锚点表条目（如抖音平台）时自动提取
+                jobs = auto_anchors(lines)
+            if not jobs:
+                print(json.dumps({"page": page_no, "status": "no_anchor"}), flush=True)
+                continue
+            if args.ascii_names:  # 中文label → zh-<md5前6位>，文件名全ASCII
+                jobs = [(ascii_label(l), c, t) for l, c, t in jobs]
 
-        local_media = p.get("media_path") and (meta_path.parent / p["media_path"])
-        video = local_media if (local_media and local_media.exists()) \
-            else img_dir / f".video_{page_no:02d}.m4s"
-        try:
-            if video is not local_media:
-                download_video(meta["bvid"], cid, video, cookie)
-            duration = float(p.get("duration") or 0)
-            times = [t for _, _, t in jobs]
-            frames = grab_frames(video, times)  # 与 times 等长，失败位为 None
-            results, failed = [], []
-            for (label, caption, t), img in zip(jobs, frames):
-                if img is None:
-                    failed.append({"label": label, "t": round(t, 1)})
-                    continue
-                qc = qc_check(img)
-                if qc != "ok":  # 本地初筛不过 → +30s 重抽一次（仍在时长内才重试）
-                    retry_t = t + QC_RETRY_AFTER
-                    if duration <= 0 or retry_t < duration - 1:
-                        retry_img = grab_frames(video, [retry_t])[0]
-                        if retry_img is not None:
-                            img, t = retry_img, retry_t
-                            qc = qc_check(img)  # 仍非 ok 则保留并标记
-                fname = f"p{page_no:02d}_{label}.png"
-                img.save(img_dir / fname)
-                results.append({"file": fname, "caption": caption,
-                                "t": round(t, 1), "qc": qc})
-            status = "ok" if not failed else "partial"
-            print(json.dumps({"page": page_no, "part": part, "frames": results,
-                              "failed": failed, "status": status},
-                             ensure_ascii=False), flush=True)
-        except Exception as e:
-            print(json.dumps({"page": page_no, "status": "error", "error": str(e)},
-                             ensure_ascii=False), flush=True)
-        finally:
-            if video is not local_media:
-                video.unlink(missing_ok=True)
+            local_media = p.get("media_path") and (meta_path.parent / p["media_path"])
+            video = local_media if (local_media and local_media.exists()) \
+                else img_dir / f".video_{page_no:02d}.m4s"
+            try:
+                if video is not local_media:
+                    download_video(meta["bvid"], cid, video, cookie)
+                duration = float(p.get("duration") or 0)
+                times = [t for _, _, t in jobs]
+                frames = grab_frames(video, times)  # 与 times 等长，失败位为 None
+                results, failed = [], []
+                for (label, caption, t), img in zip(jobs, frames):
+                    if img is None:
+                        failed.append({"page": page_no, "label": label,
+                                       "t": round(t, 1)})
+                        continue
+                    qc = qc_check(img)
+                    if qc not in ("ok", "skipped"):  # 初筛不过 → +30s 重抽一次
+                        retry_t = t + QC_RETRY_AFTER
+                        if duration <= 0 or retry_t < duration - 1:
+                            retry_img = grab_frames(video, [retry_t])[0]
+                            if retry_img is not None:
+                                img, t = retry_img, retry_t
+                                qc = qc_check(img)  # 仍非 ok 则保留并标记
+                    fname = f"p{page_no:02d}_{label}.png"
+                    img.save(img_dir / fname)
+                    results.append({"file": fname, "page": page_no,
+                                    "label": label, "caption": caption,
+                                    "t": round(t, 1), "qc": qc})
+                status = "ok" if not failed else "partial"
+                all_frames.extend(results)
+                all_failed.extend(failed)
+                touched_pages.add(page_no)
+                print(json.dumps({"page": page_no, "part": part, "frames": results,
+                                  "failed": failed, "status": status},
+                                 ensure_ascii=False), flush=True)
+            except Exception as e:
+                print(json.dumps({"page": page_no, "status": "error", "error": str(e)},
+                                 ensure_ascii=False), flush=True)
+            finally:
+                if video is not local_media:
+                    video.unlink(missing_ok=True)
+    finally:
+        write_manifest(img_dir, all_frames, all_failed, touched_pages)
 
 
 if __name__ == "__main__":
