@@ -1,0 +1,79 @@
+name: Bug 报告
+description: 报告 bilibili-douyin-notes 的功能异常
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请先搜索是否已有类似 issue。提交前请尽量把「复现步骤」「日志」「平台信息」填全，缺日志的 bug 很难定位。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 简明描述遇到了什么问题，期望行为与实际行为分别是什么。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从哪个环节开始出错？（fetch / transcribe / screenshot / 生成笔记 / validate_note）
+      placeholder: |
+        1. 运行 `python scripts/bili_fetch.py "..." "..."`
+        2. 输出 ...
+        3. 发生 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志 / 报错输出
+      description: 终端完整报错或 stderr 输出（可用 ``` 包裹）。含敏感 Cookie 请先打码。
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 出问题的平台
+      options:
+        - B站（bilibili.com / b23.tv）
+        - 抖音（douyin.com / v.douyin.com）
+        - 两者都涉及
+        - 与平台无关（工具本身）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: step
+    attributes:
+      label: 出错的环节
+      options:
+        - 第一步：抓取元数据/字幕/下载视频
+        - 第二步：ASR 转写
+        - 第二步半：截图
+        - 第三步：生成/校验笔记
+        - 安装/依赖
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境
+      description: 操作系统、Python 版本（`python --version`）
+      placeholder: "如: Windows 11, Python 3.12.3"
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自查
+      options:
+        - label: 视频为公开可访问状态（非私密/仅粉丝可见）
+        - label: 已按 README 安装 requirements.txt 中对应依赖
+        - label: B站 AI 字幕问题已确认 config.json 是否填写 SESSDATA
+        - label: 已搜索 issue 列表，无重复

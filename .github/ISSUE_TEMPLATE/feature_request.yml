@@ -1,0 +1,38 @@
+name: 功能建议
+description: 提出新功能或改进建议
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提议！建议先描述你遇到的场景（要解决什么问题），再说方案。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 场景与痛点
+      description: 你在什么场景下需要这个功能？现在是怎么绕过的？
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的方案
+      description: 期望的使用方式（命令行参数 / 生成笔记的样子 / 输出格式等）。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案
+      description: 有没有考虑过的其他做法？
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 影响范围自查
+      options:
+        - label: 该功能不违反本 skill 的离线/免费原则（不引入付费 API）
+        - label: 涉及抖音签名时已知悉 abogus.py 的 GPL 组件边界（见 SECURITY.md）

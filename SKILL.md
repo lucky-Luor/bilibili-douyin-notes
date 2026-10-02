@@ -1,6 +1,6 @@
 ---
 name: bilibili-douyin-notes
-description: 把B站/抖音视频整理成Markdown课堂笔记。当用户发来 bilibili.com、b23.tv、douyin.com、v.douyin.com、iesdouyin.com 的视频链接（或分享口令文本）并要求"做笔记/总结/课堂笔记/转成文字/复习资料"时使用。流程：按平台抓取元数据（B站优先取官方/AI字幕需SESSDATA；抖音直接下载无水印视频无需登录）→ 无字幕则用 faster-whisper 本地语音识别兜底 → 按课堂笔记模板生成 MD 文件。也适用于"把这个视频内容提取出来"类请求。
+description: 把B站/抖音视频整理成Markdown课堂笔记。用户发来 bilibili.com、b23.tv、douyin.com 等视频链接（或分享口令）并要求做笔记、总结、转文字时使用。产出符合模板规范、经质量门禁校验的课堂笔记 .md 文件。
 ---
 
 # B站/抖音视频 → Markdown 课堂笔记
@@ -31,6 +31,9 @@ description: 把B站/抖音视频整理成Markdown课堂笔记。当用户发来
 ```bash
 # B站（也支持 b23.tv 短链）
 python "<skill安装目录>/scripts/bili_fetch.py" "<视频链接>" "<工作目录>/bili-notes-<BV号>"
+
+# B站只探元数据：不抓字幕、不建目录、不写任何文件（先确认视频可访问/时长/分P数时用）
+python "<skill安装目录>/scripts/bili_fetch.py" --probe "<视频链接>"
 
 # 抖音（也支持 v.douyin.com 短链和整段分享口令文本）
 python "<skill安装目录>/scripts/douyin_fetch.py" "<链接或口令>" "<工作目录>/douyin-notes-<视频ID>"
@@ -77,16 +80,17 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 - B站：在转写稿里搜每分P"锚点关键词"（如 @Component、循环依赖、log4j），取首次出现时间-3s（ASR滞后），下载 480p DASH 视频抽帧后即删；锚点表外置在 `references/anchors.json`，该文件没有的页码（或抖音平台）自动用 `auto_anchors()` 从转写稿提取中英文关键词；
 - 抖音：直接复用第一步下载的本地视频抽帧，不再联网；
 - 未登录最高 480p（852×480），够看清 PPT/代码；填了 SESSDATA 会自动取更高画质；
-- **画质 QC**：脚本内置本地画质初筛（亮度/清晰度），非 ok 帧自动 +30s 重抽一次并标记（进度 JSON 里每帧 `qc` 字段：`ok`=合格，`dark`/`bright`/`blurry`=重抽后仍未通过的原因；取不到帧的锚点进 `failed` 列表，status 变 `partial`）。Agent 生成笔记时对非 `ok` 帧复核（视觉识别）决定是否采用；
+- **画质 QC**：脚本内置本地画质初筛，亮度用**像素占比法**（近黑像素占比>97% 判 dark，近白像素占比>98.5% 判 bright——白底 PPT 少量文字不会误判为空屏），清晰度用灰度拉普拉斯方差（<10 判 blurry）；非 ok 帧自动 +30s 重抽一次并标记（进度 JSON 里每帧 `qc` 字段：`ok`=合格，`dark`/`bright`/`blurry`=重抽后仍未通过的原因；取不到帧的锚点进 `failed` 列表，status 变 `partial`）。Agent 生成笔记时对非 `ok` 帧复核（视觉识别）决定是否采用；
 - 锚点未命中时先 grep 转写稿找 ASR 实际用词（对照 `references/asr-glossary.json`，如"权限"被转成"全线"、@Component→"art component"、Starter→"Stutter"）再补正则；
-- 生成笔记时以 `![说明](images/pXX_yyy.png)` 相对路径嵌入对应小节，文件名用 ASCII。
+- 生成笔记时以 `![说明](images/pXX_yyy.png)` 相对路径嵌入对应小节；锚点文件名**默认可中文**，需要 ASCII 文件名时给脚本加 `--ascii-names`（中文 label 自动转为 `zh-<md5前6位>`）。
 
 ### 第三步：生成课堂笔记
 
 1. 读取 metadata.json（分P结构、时长）+ 各分P转写/字幕文本。
-2. **ASR 术语校正（资产化，不是人工凭感觉）**：先读 `references/asr-glossary.json`，对每个转写稿 grep 词表左侧的错法写法（如 "art component"、"Stutter"、"加瓦一"、"BinFacture"），命中即按右侧正确写法理解/替换；词表未覆盖的新错法，按同样格式补进词表的 `map` 里。
-3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。禁止跳过分块直接全文阅读长转写稿。
-4. 按 `references/note-template.md` 生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。小节要点必须用 **`★数量 + 要点句 + [mm:ss]`** 格式（★ 语义见模板文件第二节），时间戳必须取自转写稿真实存在的时间行。
+2. **ASR 术语校正（工具化，不是凭感觉）**：先跑
+   `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份）；词表在 `references/asr-glossary.json`，词表未覆盖的新错法按同样格式补进 `map`。
+3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节。禁止跳过分块直接全文阅读长转写稿。
+4. 按 `references/note-template.md` 生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。文件开头加 frontmatter（`---` 包围）并写入 `template_version: v1`（与模板文件标注的版本一致，模板升级后可追溯）。小节要点必须用 **`★数量 + 要点句 + [mm:ss]`** 格式（★ 语义见模板文件第二节），时间戳必须取自转写稿真实存在的时间行。
 5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
 6. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用问题 / 答疑
+    url: https://github.com/lucky-Luor/bilibili-douyin-notes/discussions
+    about: 安装、配置、用法类问题请先看 README 与 SKILL.md，仍未解决可到 Discussions 提问
