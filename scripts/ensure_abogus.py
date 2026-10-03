@@ -186,6 +186,12 @@ def ensure(quiet: bool = False) -> bool:
 
 
 if __name__ == "__main__":
+    # stdout 兜底为 UTF-8：Agent 管道调用时编码常是 gbk/cp936，
+    # 含 emoji/生僻字的消息会让 print 直接 UnicodeEncodeError（第三轮复检 M3）
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     try:
         ensure()
     except RuntimeError as e:

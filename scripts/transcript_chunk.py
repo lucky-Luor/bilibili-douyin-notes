@@ -20,7 +20,23 @@
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
+
+
+def _reconfigure_stdout() -> None:
+    """stdout 兜底为 UTF-8：Agent 管道调用时编码常是 gbk/cp936，
+    emoji 标题会让 print 直接 UnicodeEncodeError（第三轮复检 M3）。"""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def print_json_summary(obj: dict, **kw) -> None:
+    """stdout 机器可读 JSON 摘要行。ensure_ascii=True：即便兜底失效、
+    遇到 GBK 管道也不会崩——JSON 转义无损，下游 json.loads 照样还原 emoji。"""
+    print(json.dumps(obj, ensure_ascii=True, **kw))
 
 
 def chunk_paragraphs(paras: list[str], budget: int, overlap: int) -> list[list[str]]:
@@ -45,6 +61,7 @@ def chunk_paragraphs(paras: list[str], budget: int, overlap: int) -> list[list[s
 
 
 def main():
+    _reconfigure_stdout()
     ap = argparse.ArgumentParser(description="长转写稿分块（map-reduce 用）")
     ap.add_argument("src", help="转写稿 .txt 路径（每行一段，[mm:ss] 内容 格式）")
     ap.add_argument("--budget", type=int, default=15000, help="每块字符预算（默认15000）")
@@ -54,11 +71,11 @@ def main():
 
     src = Path(args.src)
     if not src.exists():
-        print(json.dumps({"error": f"文件不存在: {src}"}, ensure_ascii=False))
+        print_json_summary({"error": f"文件不存在: {src}"})
         raise SystemExit(1)
     paras = [l.rstrip("\n") for l in src.read_text(encoding="utf-8").splitlines() if l.strip()]
     if not paras:
-        print(json.dumps({"error": "转写稿为空"}, ensure_ascii=False))
+        print_json_summary({"error": "转写稿为空"})
         raise SystemExit(1)
 
     chunks = chunk_paragraphs(paras, args.budget, args.overlap)
@@ -73,9 +90,9 @@ def main():
         os.replace(tmp, out)  # 原子写：.tmp → os.replace，避免中断留下半截文件
         summary.append({"file": str(out), "chars": sum(len(x) for x in chunk)})
 
-    print(json.dumps({"n_chunks": len(chunks),
-                      "files": [s["file"] for s in summary],
-                      "chunks": summary}, ensure_ascii=False, indent=2))
+    print_json_summary({"n_chunks": len(chunks),
+                        "files": [s["file"] for s in summary],
+                        "chunks": summary}, indent=2)
 
 
 if __name__ == "__main__":

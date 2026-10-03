@@ -65,7 +65,9 @@ def test_cli_end_to_end(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "transcript_chunk.py"),
          str(src), "--budget", "30", "--overlap", "1", "--outdir", str(outdir)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",  # 不指定则随父进程 locale，-X utf8 下子进程 cp936 解码会失败
+        timeout=60)
     assert proc.returncode == 0, proc.stderr
     summary = json.loads(proc.stdout)
     assert summary["n_chunks"] >= 2
