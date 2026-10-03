@@ -3,7 +3,8 @@
 """bilibili-douyin-notes ASR 术语校正工具（报告式，可审计，不静默替换）。
 
 用法:
-    python apply_glossary.py <文件.md|.txt> [更多文件...] [--glossary <词表路径>] [--apply]
+    python apply_glossary.py <文件.md|.txt> [更多文件...] [--glossary <词表路径>] [--dry-run]
+    python apply_glossary.py <文件.md|.txt> [更多文件...] [--glossary <词表路径>] --apply
 
 词表:
     默认 <skill目录>/references/asr-glossary.json（JSON，键 "map"：错法→正确写法）。
@@ -13,6 +14,8 @@
 
 模式:
     默认 --dry-run：只输出报告行 `[mm:ss] "错法" -> 正确词 | 上下文±20字`，不改任何文件。
+    --dry-run 可显式传入（行为与默认相同，便于 Agent 编排时意图明确）；与 --apply 互斥，
+    同时传入 argparse 直接报错（退出码 2）。
     --apply：先把原文件备份为 <文件>.bak，再原子写（.tmp → os.replace）完成替换。
     设计原则：替换是否成立依赖语境（如「全线」→「权限」仅在 Reactive 权限例子语境成立），
     必须先看 dry-run 报告逐条确认，再决定是否 --apply；本工具不做任何静默改写。
@@ -121,15 +124,34 @@ def process_file(path: Path, glossary: dict[str, str], pat: re.Pattern,
             "replaced": len(hits) if apply else 0, "backup": backup}
 
 
+def _reconfigure_stdout() -> None:
+    """stdout 兜底为 UTF-8：Agent 管道调用时编码常是 gbk/cp936，
+    emoji 会让 print 直接 UnicodeEncodeError（第三轮复检 M3）。"""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def print_json_summary(obj: dict, **kw) -> None:
+    """stdout 机器可读 JSON 摘要行。ensure_ascii=True：即便兜底失效、
+    遇到 GBK 管道也不会崩——JSON 转义无损，下游 json.loads 照样还原 emoji。"""
+    print(json.dumps(obj, ensure_ascii=True, **kw))
+
+
 def main():
+    _reconfigure_stdout()
     ap = argparse.ArgumentParser(
         description="ASR 术语校正（报告式，可审计；--apply 才落盘）",
-        epilog="示例: python apply_glossary.py 转写.txt --dry-run   # 先看报告\n"
+        epilog="示例: python apply_glossary.py 转写.txt --dry-run   # 只看报告不改文件\n"
                "      python apply_glossary.py 转写.txt --apply          # 确认后替换")
     ap.add_argument("files", nargs="+", help="要校正的 .md / .txt 文件（可多个）")
     ap.add_argument("--glossary", help="词表路径（默认 <skill目录>/references/asr-glossary.json）")
-    ap.add_argument("--apply", action="store_true",
-                    help="实际替换（先写 .bak 备份，再原子写）；缺省为 dry-run 只报告")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", dest="dry_run", action="store_true",
+                      help="只输出报告不改任何文件（与默认行为相同；显式传参便于 Agent 编排时明确意图）")
+    mode.add_argument("--apply", action="store_true",
+                      help="实际替换（先写 .bak 备份，再原子写）；缺省为 dry-run 只报告")
     args = ap.parse_args()
 
     glossary_path = (Path(args.glossary) if args.glossary
@@ -138,18 +160,19 @@ def main():
         glossary = load_glossary(glossary_path)
         pat = build_pattern(glossary)
     except (OSError, ValueError) as e:
-        print(json.dumps({"error": f"词表加载失败: {e}"}, ensure_ascii=False))
+        print_json_summary({"error": f"词表加载失败: {e}"})
         sys.exit(1)
 
     summaries = []
     for f in args.files:
         path = Path(f)
         if not path.exists():
-            print(json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False))
+            print_json_summary({"error": f"文件不存在: {path}"})
             sys.exit(1)
         summaries.append(process_file(path, glossary, pat, args.apply))
-    print(json.dumps({"glossary": str(glossary_path), "mode": "apply" if args.apply else "dry-run",
-                      "results": summaries}, ensure_ascii=False))
+    print_json_summary({"glossary": str(glossary_path),
+                        "mode": "apply" if args.apply else "dry-run",
+                        "results": summaries})
 
 
 if __name__ == "__main__":
