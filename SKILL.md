@@ -43,7 +43,7 @@ python "<skill安装目录>/scripts/douyin_fetch.py" "<链接或口令>" "<工�
 - **B站**：每个分P的字幕 `.txt`（带 `[mm:ss]` 时间戳），按摘要里每个分P的 **`subtitle_detail` 字段四态分流**：
   - `cc` / `ai` → 已拿到官方/AI字幕，直接进入第三步生成笔记；
   - `none` → 该分P确实没有字幕，直接进入第二步 ASR，不用再折腾；
-  - `api_empty` → 接口没返回可用字幕URL（`sessdata_loaded:false` 时常见，AI字幕需要登录）：**先提示用户在 config.json 填 SESSDATA 后重跑一次 fetch**；重跑后仍是 `api_empty` 才走第二步 ASR 兜底；
+  - `api_empty` → 接口没返回可用字幕URL（`sessdata_loaded:false` 时常见，AI字幕需要登录）：**主动询问用户「要现在扫码登录B站吗？」，确认后代跑 `python "<skill安装目录>/scripts/bili_fetch.py" --login`（终端出二维码，B站App扫码即登录，SESSDATA 自动写入 config.json）后重跑一次 fetch**；用户拒绝或重跑后仍是 `api_empty` 才走第二步 ASR 兜底；
   - `error` → 查看摘要里的 error 信息（可能是视频失效/风控），重试一次或直接告知用户。
 - **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（无水印，本地已存在则跳过下载），无字幕，直接进入第二步 ASR。
 
@@ -60,8 +60,9 @@ python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-not
 ```
 
 注意事项：
-- **设备**：脚本自动检测 CUDA（有 NVIDIA GPU 用 float16，否则 CPU int8）；检测异常时可用 `--device cpu` / `--device cuda` 强制指定。
-- **耗时**：CPU int8 下 small 模型约 1~3 倍速实时，长视频（>1小时）耗时明显，转写前告知用户预计时间；长视频或对质量不满意时用 `--model medium` 重转（**先删对应的 txt**，否则脚本会跳过）。
+- **设备与降级链**：自动检测 CUDA（有 NVIDIA GPU 用 float16，否则 CPU int8 + 批量推理）；cuda 加载失败自动回退 cpu，批量推理不可用自动回退逐段，高阶模型（medium/large）加载失败自动降一档直到 small——**每次落级都打印原因（stderr 警告 + JSON `fallback_reasons`），不静默**。检测异常时可用 `--device cpu` / `--device cuda` 强制指定；`--model` 未指定时读 config.json 的 `asr_model`（再默认 small），`asr_cpu_threads` 可调 CPU 线程数。
+- **术语偏好注入**：脚本自动读词表（仓库层 + 用户层），把高频术语的正确词注入 ASR 的 initial_prompt——转写时就写对，比事后纠错更准。
+- **耗时**：CPU int8 下 small 模型约 1~3 倍速实时（批量推理开启后更快），长视频（>1小时）耗时明显，转写前告知用户预计时间；长视频或对质量不满意时用 `--model medium` 重转（**先删对应的 txt**，否则脚本会跳过）。
 - 首次运行会下载模型（small≈480MB，自动走 hf-mirror.com 镜像）。
 - ASR 文稿没有标点分段质量保证，技术术语常被转错——生成笔记前用 `references/asr-glossary.json` 词表对照校正（见第三步第2条）。
 
@@ -88,7 +89,7 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 
 1. 读取 metadata.json（分P结构、时长）+ 各分P转写/字幕文本。
 2. **ASR 术语校正（工具化，不是凭感觉）**：先跑
-   `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份）；词表在 `references/asr-glossary.json`，词表未覆盖的新错法按同样格式补进 `map`。
+   `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，按类别分组只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份，命中词条 hits 自动累加）。词表分两层：仓库层 `references/asr-glossary.json`（编程/美食/游戏/通用大类）+ 用户层（输出目录 `glossary.user.json` 或 `~/.zcode/bdn-glossary.user.json`，同键用户层优先）；候选词命中只报告（标 `[候选]`）永不替换。**维护闭环**：发现词表未覆盖的新错法 → `--add "错法=正确词" --category 编程`（或 `--candidate` 先入候选、`--promote "错法"` 转正）；`--list` 查看全部；`--categories`/`--topic` 控制启用范围。注意：转写阶段已自动把高频术语注入 initial_prompt（见第二步），词表越丰富转写越准。
 3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节。禁止跳过分块直接全文阅读长转写稿。
 4. 按 `references/note-template.md`（**v2 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。生成前必读该模板文件。v2 硬性要求：
    - **frontmatter**（`---` 包围）写全：`template_version: v2`、`note_type`（取 metadata.json 顶层 `suggested_note_type`，技术密度高的短片可覆盖为 lecture）、`platform`、`bvid`（抖音填 `video_id`）、`source`、`created`、`duration`（带引号的 `"mm:ss"`）；
@@ -105,6 +106,9 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 7. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
    errors 必须为 0 才交付；warnings 酌情处理（如补证据锚点、精简篇幅）。门禁按 frontmatter 的 `template_version` 分派规则（缺失视为 v1 走旧 ★ 规则）。**破坏性变更（v2 起）**：报告 JSON 的 `errors` / `warnings` 从字符串数组升级为**对象数组**（每项含 `check` 检查编号与 `line` 行号），调用方若按字符串解析需同步适配。
+8. **媒体清理（交付后必问用户）**：若输出目录存在缓存媒体（抖音的 `media_p01.mp4` 等本地视频，或残留的 `.part`/`.audio_*`/`.video_*` 临时文件），**询问用户「是否清理缓存的视频/音频文件？重新做笔记会重新下载」**：确认 → 先跑
+   `python "<skill安装目录>/scripts/clean_media.py" "<输出目录>"`
+   把将删除的清单给用户过目，再执行 `--apply` 实删；拒绝 → 跳过并说明缓存保留的意义（重跑截图/转写不再联网）。B站的临时音频/视频在流程中已自动删除，通常无残留。
 
 ## 笔记模板
 

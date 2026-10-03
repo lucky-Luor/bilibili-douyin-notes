@@ -75,8 +75,9 @@ pip install -r requirements.txt
 # （可选）只装测试依赖：tests/ 离线可跑，无需上面任何重依赖
 pip install -r requirements-dev.txt
 
-# 3. （可选）配置 SESSDATA 以获取B站 AI 字幕
-cp config.example.json config.json   # 按文件内注释填入 SESSDATA
+# 3. （可选）扫码登录B站，自动获取 AI 字幕
+python scripts/bili_fetch.py --login   # 终端出二维码，B站App扫码即登录，SESSDATA 自动写入 config.json
+                                       # 无 B站App：cp config.example.json config.json 后按文件内注释手动填写
 ```
 
 > **路径说明**：`SKILL.md` 中示例命令使用了作者本机的绝对路径，安装后请把其中的
@@ -105,8 +106,17 @@ cp config.example.json config.json   # 按文件内注释填入 SESSDATA
 }
 ```
 
-获取方式：浏览器登录 bilibili.com → F12 → Application → Cookies → 复制 `SESSDATA`。
-该文件已被 `.gitignore` 排除，不会被提交。抖音流程无需任何配置。
+获取方式（推荐）：`python scripts/bili_fetch.py --login`，用 B站 App 扫描终端二维码即登录，
+SESSDATA 自动写入 config.json；二维码过期自动换新。手动路径：浏览器登录 bilibili.com →
+F12 → Application → Cookies → 复制 `SESSDATA`。该文件已被 `.gitignore` 排除，不会被提交
+（含登录凭据，请勿分享）。抖音流程无需任何配置。
+
+### 转写性能（可选配置）
+
+CPU 转写慢时可在 config.json 调整：`asr_model`（tiny~large-v3，高阶加载失败自动降一档）、
+`asr_device`（auto/cpu/cuda，cuda 失败自动回退 cpu）、`asr_cpu_threads`（0=自动）。
+每次降级都会打印原因，不静默。整理完成后可让 AI 询问你是否清理缓存的媒体文件
+（`scripts/clean_media.py`，默认只列清单、`--apply` 实删）。
 
 ## 🚀 使用
 
