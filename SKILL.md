@@ -20,7 +20,7 @@ description: 把B站/抖音视频整理成Markdown课堂笔记。用户发来 bi
 - 脚本目录：本 skill 安装目录下的 `scripts/`（下文命令中的绝对路径请替换为你的实际安装路径）
 - 配置文件：本 skill 安装目录下的 `config.json`（存放 SESSDATA）
 - 参考资产：
-  - `references/note-template.md` —— 课堂笔记模板、★语义定义、证据锚点规范
+  - `references/note-template.md` —— 课堂笔记模板 v2（骨架、三词标签、语法契约、证据锚点规范）
   - `references/asr-glossary.json` —— ASR 术语纠错词表（真实错法→正确写法）
   - `references/anchors.json` —— 截图锚点关键词表（按分P，可按需补充）
 
@@ -90,17 +90,37 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 2. **ASR 术语校正（工具化，不是凭感觉）**：先跑
    `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份）；词表在 `references/asr-glossary.json`，词表未覆盖的新错法按同样格式补进 `map`。
 3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节。禁止跳过分块直接全文阅读长转写稿。
-4. 按 `references/note-template.md` 生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。文件开头加 frontmatter（`---` 包围）并写入 `template_version: v1`（与模板文件标注的版本一致，模板升级后可追溯）。小节要点必须用 **`★数量 + 要点句 + [mm:ss]`** 格式（★ 语义见模板文件第二节），时间戳必须取自转写稿真实存在的时间行。
+4. 按 `references/note-template.md`（**v2 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。生成前必读该模板文件。v2 硬性要求：
+   - **frontmatter**（`---` 包围）写全：`template_version: v2`、`note_type`（取 metadata.json 顶层 `suggested_note_type`，技术密度高的短片可覆盖为 lecture）、`platform`、`bvid`（抖音填 `video_id`）、`source`、`created`、`duration`（带引号的 `"mm:ss"`）；
+   - **三词标签标注行**：小节要点用 `- **核心必考|重点掌握|了解即可** 要点句 [mm:ss]` 格式，标签词严格用白名单三词（v2 不用 ★ 符号，禁止"必考/核心考点"等变体）；每讲至少 1 条核心必考，其数量占标注行总数 ≤1/3（lecture）；
+   - **概念卡片**：`### 概念名（标签词）` + 定义/出现（≥2 小节）/依赖/易混 四行；
+   - **自测题折叠答案**：每题末尾 `（对应：概念名）`，紧跟 `<details><summary>答案</summary>` 折叠块，答案以 `**答案：**` 开头、至多一行、带证据锚点；lecture 5~9 道（short 2~3 道）；
+   - **mermaid 知识地图**：` ```mermaid mindmap `，节点标签禁半角括号与引号、≤12 字（括号用全角）；
+   - **参考时间戳不要手写**：文末留 `<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->` 与 `<!-- NAV:END -->` 占位（内容交给下一步脚本填充）；`note_type=short` 时整个区块可省略；
+   - 所有时间戳必须取自转写稿真实存在的时间行（允许 ±5s 内小幅前移，禁止虚构）。
 5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
-6. **质量门禁**：生成后运行
+6. **填充参考时间戳（lecture 型必做；short 跳过）**：
+   `python "<skill安装目录>/scripts/note_nav.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
+   脚本幂等替换 NAV 标记之间的内容（B站生成 `?p=N&t=S` 深链，抖音纯文本）；标记缺失时追加到文件末尾。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
+7. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
-   errors 必须为 0 才交付；warnings 酌情处理（如补证据锚点、精简篇幅）。
+   errors 必须为 0 才交付；warnings 酌情处理（如补证据锚点、精简篇幅）。门禁按 frontmatter 的 `template_version` 分派规则（缺失视为 v1 走旧 ★ 规则）。**破坏性变更（v2 起）**：报告 JSON 的 `errors` / `warnings` 从字符串数组升级为**对象数组**（每项含 `check` 检查编号与 `line` 行号），调用方若按字符串解析需同步适配。
 
 ## 笔记模板
 
-模板全文（完整骨架 + ★语义定义 + 证据锚点规范 + 要点清单）见 **`references/note-template.md`**，生成笔记前必读。骨架速览：
+模板全文（完整骨架 + 三词标签定义 + 语法契约 + 证据锚点规范 + short 差异表 + 要点清单）见 **`references/note-template.md`**（**v2**），生成笔记前必读。骨架速览：
 
 ```markdown
+---
+template_version: v2
+note_type: lecture
+platform: bilibili            # 抖音为 douyin，bvid 字段填 video_id
+bvid: BV1xxxxxxxxx
+source: https://www.bilibili.com/video/BV1xxxxxxxxx
+created: 2026-10-03
+duration: "42:10"
+---
+
 # 课堂笔记 <序号>：<主题>
 
 > 课程来源：<视频标题>（B站 <BV号> 或 抖音 <视频ID>，UP主/作者：<名字>，共N个小节约M分钟）
@@ -116,8 +136,9 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 
 **核心思想：**<一句话>
 
-- ★★★ 要点句 [mm:ss]
-- ★★ 要点句 [mm:ss]
+- **核心必考** 要点句 [mm:ss]
+- **重点掌握** 要点句 [mm:ss]
+- **了解即可** 要点句
 
 <真实代码示例（注明来源：分P/时刻 或 仓库文件）……>
 <概念对比表格……>
@@ -126,24 +147,46 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 
 ## 本讲知识地图
 
-<ASCII 图/缩进列表串起本讲知识点>
+```mermaid
+mindmap
+  root((<主题>))
+    小节1
+      概念A
+```
+
+## 概念卡片
+
+### <概念名>（核心必考）
+
+- 定义：<一句话>
+- 出现：<小节序号>（[mm:ss]）、<小节序号>（[mm:ss]）
+- 依赖：<概念名>
+- 易混：<概念名>——<一句话区别>
 
 ## 自测题（复习用）
 
-1. <5~9道覆盖核心概念的问答题，附提示>
+1. <题干>？（对应：<概念名>）
+<details><summary>答案</summary>
 
+**答案：** <答案正文，至多一行> [mm:ss]
+
+</details>
+
+<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->
 ## 参考时间戳
 
-- [mm:ss] <关键节点>
+- [mm:ss](<深链由脚本生成>) <关键节点>
+<!-- NAV:END -->
 ```
 
-模板要点（★ 数量语义、证据锚点规范、代码来源标注的完整定义以 `references/note-template.md` 为准）：
+模板要点（三词语义、语法契约、证据锚点规范、short 型差异的完整定义以 `references/note-template.md` 为准）：
 
-- 按视频小节顺序组织，每节标注时长；
-- 要点用 `★数量 + 要点句 + [mm:ss]` 标注（★★★ 核心概念/必考点每讲 2~4 个；★★ 重要机制/易混淆点；★ 补充了解）；
-- 代码块用课程真实代码，注明来源（子项目 / 时刻 / 仓库文件）；
-- 概念对比用表格；
-- 结尾必有"知识地图"+"自测题"，可附"参考时间戳"附录。
+- 按视频小节顺序组织，每节标注时长，以 `**核心思想：**` 一句话开头；
+- 要点用 `- **核心必考|重点掌握|了解即可** 要点句 [mm:ss]` 三词标签标注
+  （核心必考=核心概念/必考点，重点掌握=重要机制/易混淆点，了解即可=补充了解）；
+- 概念卡片、自测题（折叠答案）、mermaid 知识地图按第五节语法契约写；
+- 参考时间戳留 NAV 标记占位，由 `note_nav.py` 填充（short 型省略）；
+- 代码块用课程真实代码，注明来源（子项目 / 时刻 / 仓库文件）。
 
 ## 常见问题
 
