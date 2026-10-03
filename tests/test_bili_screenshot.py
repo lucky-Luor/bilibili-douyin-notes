@@ -5,6 +5,7 @@ qc_check 用四类合成图（PIL 生成，纯本地）：
     纯白 → bright、白底+少量字 → ok、纯黑 → dark、噪声 → ok。
 """
 import hashlib
+import json
 import random
 
 import pytest
@@ -47,15 +48,16 @@ def _lines():
 def test_auto_anchors_chinese_keywords():
     jobs = bili_screenshot.auto_anchors(_lines())
     assert 0 < len(jobs) <= 3
-    for label, caption, t in jobs:
+    for label, keyword, caption, t in jobs:
         assert isinstance(label, str) and label
+        assert isinstance(keyword, str) and keyword  # M2: 锚点原文
         assert "出现的画面" in caption
         assert t >= 2.0
 
 
 def test_auto_anchors_times_spread_and_valid():
     jobs = bili_screenshot.auto_anchors(_lines())
-    times = [t for _, _, t in jobs]
+    times = [t for *_, t in jobs]
     assert all(t >= 2.0 for t in times)
     for i in range(len(times)):
         for j in range(i + 1, len(times)):
@@ -74,7 +76,7 @@ def test_auto_anchors_empty_input():
 def test_auto_anchors_prefers_repeated_terms():
     lines = [(10.0, "事务"), (20.0, "事务传播"), (30.0, "事务隔离级别")]
     jobs = bili_screenshot.auto_anchors(lines)
-    assert jobs and any("事务" in label for label, _, _ in jobs)
+    assert jobs and any("事务" in label for label, *_ in jobs)
 
 
 # ---------- qc_check（四类合成图） ----------
@@ -136,3 +138,103 @@ def test_ascii_label_chinese_becomes_zh_md5():
     out = bili_screenshot.ascii_label("循环依赖")
     assert out == "zh-" + hashlib.md5("循环依赖".encode("utf-8")).hexdigest()[:6]
     assert out.isascii()
+
+
+# ---------- M2: manifest keyword 字段 / M9: 孤儿 PNG 清理（main 集成，全 mock） ----------
+
+def _run_main(tmp_path, monkeypatch, capsys, old_manifest=None):
+    """mock 网络/解码，跑 main()，返回 (manifest dict, stdout 末行 JSON)。"""
+    import PIL.Image
+
+    meta = {"bvid": "BV1xx411c7mD",
+            "pages": [{"page": 1, "part": "P1", "cid": 1, "duration": 600}]}
+    (tmp_path / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False),
+                                            encoding="utf-8")
+    txt_dir = tmp_path / "txt"
+    txt_dir.mkdir()
+    (txt_dir / "01_P1.txt").write_text("[00:10] 循环依赖的三级缓存\n", encoding="utf-8")
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    if old_manifest is not None:
+        (img_dir / "manifest.json").write_text(
+            json.dumps(old_manifest, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(bili_screenshot, "load_anchors",
+                        lambda: {1: [("循环依赖", "循环依赖的图示", ["循环依赖"])]})
+    monkeypatch.setattr(bili_screenshot, "load_sessdata", lambda: "")
+    monkeypatch.setattr(bili_screenshot, "download_video",
+                        lambda bvid, cid, dest, cookie="": dest.write_bytes(b"fake") or dest)
+    monkeypatch.setattr(bili_screenshot, "grab_frames",
+                        lambda video, times: [PIL.Image.new("RGB", (4, 4)) for _ in times])
+    monkeypatch.setattr(bili_screenshot, "qc_check", lambda img: "ok")
+
+    bili_screenshot.main([str(tmp_path / "metadata.json"), str(txt_dir), str(img_dir), "1"])
+    manifest = json.loads((img_dir / "manifest.json").read_text(encoding="utf-8"))
+    out = capsys.readouterr().out
+    last = json.loads(out.strip().splitlines()[-1])
+    return img_dir, manifest, last
+
+
+def test_main_manifest_and_stdout_have_keyword(tmp_path, monkeypatch, capsys):
+    img_dir, manifest, last = _run_main(tmp_path, monkeypatch, capsys)
+    assert manifest["frames"], "应有成功帧"
+    for f in manifest["frames"]:
+        assert f["keyword"] == "循环依赖"  # M2: manifest 每条 frame 带 keyword
+    # stdout 进度行 frames 与 manifest 同构，同样带 keyword
+    assert last["frames"] and last["frames"][0]["keyword"] == "循环依赖"
+
+
+def test_main_keyword_keeps_original_with_ascii_names(tmp_path, monkeypatch, capsys):
+    import PIL.Image
+    meta = {"bvid": "BV1xx411c7mD",
+            "pages": [{"page": 1, "part": "P1", "cid": 1, "duration": 600}]}
+    (tmp_path / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False),
+                                            encoding="utf-8")
+    txt_dir = tmp_path / "txt"
+    txt_dir.mkdir()
+    (txt_dir / "01_P1.txt").write_text("[00:10] 循环依赖的三级缓存\n", encoding="utf-8")
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    monkeypatch.setattr(bili_screenshot, "load_anchors",
+                        lambda: {1: [("循环依赖", "循环依赖的图示", ["循环依赖"])]})
+    monkeypatch.setattr(bili_screenshot, "load_sessdata", lambda: "")
+    monkeypatch.setattr(bili_screenshot, "download_video",
+                        lambda bvid, cid, dest, cookie="": dest.write_bytes(b"fake") or dest)
+    monkeypatch.setattr(bili_screenshot, "grab_frames",
+                        lambda video, times: [PIL.Image.new("RGB", (4, 4)) for _ in times])
+    monkeypatch.setattr(bili_screenshot, "qc_check", lambda img: "ok")
+    bili_screenshot.main([str(tmp_path / "metadata.json"), str(txt_dir), str(img_dir),
+                          "1", "--ascii-names"])
+    manifest = json.loads((img_dir / "manifest.json").read_text(encoding="utf-8"))
+    f = manifest["frames"][0]
+    assert f["file"].isascii()           # label 转 ASCII 文件名
+    assert f["keyword"] == "循环依赖"     # keyword 保留锚点原文
+
+
+def test_write_manifest_cleans_orphan_pngs_on_overwrite(tmp_path):
+    """M9：重跑覆盖页时，该页不再被引用的旧 PNG 被删除；保留页与跨分P不受影响。"""
+    old = {"frames": [
+        {"file": "p01_keep.png", "page": 1, "t": 5},
+        {"file": "p01_orphan.png", "page": 1, "t": 50},
+        {"file": "p02_keep.png", "page": 2, "t": 5},
+    ], "failed": []}
+    for fn in ("p01_keep.png", "p01_orphan.png", "p02_keep.png"):
+        (tmp_path / fn).write_bytes(b"png")
+    (tmp_path / "manifest.json").write_text(json.dumps(old, ensure_ascii=False),
+                                            encoding="utf-8")
+    bili_screenshot.write_manifest(tmp_path, [{"file": "p01_keep.png", "page": 1}],
+                                   [], touched={1})
+    assert (tmp_path / "p01_keep.png").exists()   # 新记录仍引用
+    assert not (tmp_path / "p01_orphan.png").exists()  # 被覆盖页的孤儿 → 删除
+    assert (tmp_path / "p02_keep.png").exists()   # 跨分P合并逻辑不变
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    files = [f["file"] for f in manifest["frames"]]
+    assert "p01_orphan.png" not in files
+    assert "p02_keep.png" in files
+
+
+def test_write_manifest_keeps_files_when_page_untouched(tmp_path):
+    (tmp_path / "a.png").write_bytes(b"png")
+    old = {"frames": [{"file": "a.png", "page": 3}], "failed": []}
+    bili_screenshot.write_manifest(tmp_path, [{"file": "b.png", "page": 1}],
+                                   [], touched={1})
+    assert (tmp_path / "a.png").exists()

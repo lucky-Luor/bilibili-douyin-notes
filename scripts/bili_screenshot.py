@@ -23,12 +23,16 @@
        numpy 未安装时跳过初筛（qc="skipped"），流程继续。
        本地初筛只是自动兜底，最终复核由调用方（Agent）视觉完成。
     5. 运行结束把全部截图元数据写入 <img_dir>/manifest.json（跨分P累积、
-       同页重跑时该页旧记录覆盖），供 validate_note.py 交叉校验图注与画面。
+       同页重跑时该页旧记录覆盖，被覆盖页不再被引用的旧 PNG 一并删除），
+       供 validate_note.py 交叉校验图注与画面。
 
 输出契约:
     stdout 每个分P输出一行 JSON 进度：
-        {"page":.., "part":.., "frames":[{"file","page","label","caption","t","qc"}],
+        {"page":.., "part":..,
+         "frames":[{"file","page","label","keyword","caption","t","qc"}],
          "failed":[{"page","label","t"}], "status":"ok"|"partial"|...}
+    frames 里的 keyword 为锚点原文（匹配转写稿用的关键词），与 manifest
+    同构；--ascii-names 只改写 label（文件名），keyword 保留原文。
     frames 与锚点一一对应，任一帧取不到（None）时该锚点不生成 png、
     进入 failed 列表，其余截图的图注不受影响；全部成功 status=ok，
     有失败帧 status=partial。
@@ -145,7 +149,8 @@ def auto_anchors(lines: list[tuple[float, str]], max_n: int = 3) -> list[tuple[s
     融合为 次数×长度 打分优选（频次与长度兼顾），已选关键词的子串不再重复选。
     中英混合排序（英文权重 1.5），总量限 max_n，截图时间彼此至少错开15秒。
 
-    返回 [(label, caption, 抽帧秒), ...]。
+    返回 [(label, keyword, caption, 抽帧秒), ...]，keyword 为锚点原文
+    （英文 token 含 @ 前缀的原始形态，中文与 label 相同）。
     """
     from collections import Counter
     en_cnt, zh_cnt = Counter(), Counter()
@@ -191,7 +196,7 @@ def auto_anchors(lines: list[tuple[float, str]], max_n: int = 3) -> list[tuple[s
             continue
         caption = (f"关键词“{tok}”出现的画面" if is_zh
                    else f"关键词「{tok}」出现的画面")
-        jobs.append((label, caption, t))
+        jobs.append((label, tok, caption, t))
         kept_t.append(t)
         kept_tok.append(tok)
     return jobs
@@ -299,22 +304,48 @@ def parse_args(argv=None):
 
 
 def write_manifest(img_dir: Path, frames: list, failed: list, touched: set):
-    """把截图元数据落盘 manifest.json：本次处理的页覆盖旧记录，未触及的页保留。"""
+    """把截图元数据落盘 manifest.json：本次处理的页覆盖旧记录，未触及的页保留。
+
+    M9：被覆盖页（touched）不再被新记录引用的旧 PNG 视为孤儿文件删除；
+    跨分P合并逻辑不变，只清被覆盖页的孤儿（以新记录 file 集合为准，
+    未触及页的 file 不受影响）。删除清单输出到 stderr。
+    """
     mpath = img_dir / "manifest.json"
     old_frames, old_failed = [], []
     if mpath.exists():
         try:
             old = json.loads(mpath.read_text(encoding="utf-8"))
+        except Exception:
+            old = None
+        if isinstance(old, dict):
             old_frames = [f for f in old.get("frames", []) if f.get("page") not in touched]
             old_failed = [f for f in old.get("failed", []) if f.get("page") not in touched]
-        except Exception:
-            old_frames, old_failed = [], []
+            if touched:
+                new_files = {f.get("file") for f in frames
+                             if isinstance(f, dict) and f.get("file")}
+                keep_files = new_files | {f.get("file") for f in old_frames
+                                          if isinstance(f, dict) and f.get("file")}
+                orphans = []
+                for f in old.get("frames", []):
+                    fn = f.get("file") if isinstance(f, dict) else None
+                    if fn and f.get("page") in touched and fn not in keep_files:
+                        orphan = img_dir / fn
+                        if orphan.is_file():
+                            orphan.unlink(missing_ok=True)
+                            orphans.append(fn)
+                if orphans:
+                    print(f"cleaned orphan pngs (overwritten pages): {orphans}",
+                          file=sys.stderr)
     manifest = {"frames": old_frames + frames, "failed": old_failed + failed}
     mpath.write_text(json.dumps(manifest, ensure_ascii=False, indent=2),
                      encoding="utf-8")
 
 
 def main(argv=None):
+    try:  # Agent 经管道调用时 stdout 可能是 gbk，emoji 标题会炸在最后一行 print
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     args = parse_args(argv)
     meta_path, txt_dir, img_dir = args.meta, args.txt_dir, args.img_dir
     only_pages = ({int(x) for x in args.pages.split(",")}
@@ -339,14 +370,15 @@ def main(argv=None):
             for label, caption, patterns in anchors.get(page_no, []):
                 t = find_anchor_times(lines, patterns)
                 if t is not None:
-                    jobs.append((label, caption, t))
+                    # (label, keyword, caption, t)：keyword=锚点原文（label 即原文）
+                    jobs.append((label, label, caption, t))
             if not jobs:  # 无锚点表条目（如抖音平台）时自动提取
                 jobs = auto_anchors(lines)
             if not jobs:
                 print(json.dumps({"page": page_no, "status": "no_anchor"}), flush=True)
                 continue
-            if args.ascii_names:  # 中文label → zh-<md5前6位>，文件名全ASCII
-                jobs = [(ascii_label(l), c, t) for l, c, t in jobs]
+            if args.ascii_names:  # 中文label → zh-<md5前6位>，文件名全ASCII；keyword 保留原文
+                jobs = [(ascii_label(l), k, c, t) for l, k, c, t in jobs]
 
             local_media = p.get("media_path") and (meta_path.parent / p["media_path"])
             video = local_media if (local_media and local_media.exists()) \
@@ -355,10 +387,10 @@ def main(argv=None):
                 if video is not local_media:
                     download_video(meta["bvid"], cid, video, cookie)
                 duration = float(p.get("duration") or 0)
-                times = [t for _, _, t in jobs]
+                times = [t for *_, t in jobs]
                 frames = grab_frames(video, times)  # 与 times 等长，失败位为 None
                 results, failed = [], []
-                for (label, caption, t), img in zip(jobs, frames):
+                for (label, keyword, caption, t), img in zip(jobs, frames):
                     if img is None:
                         failed.append({"page": page_no, "label": label,
                                        "t": round(t, 1)})
@@ -374,7 +406,8 @@ def main(argv=None):
                     fname = f"p{page_no:02d}_{label}.png"
                     img.save(img_dir / fname)
                     results.append({"file": fname, "page": page_no,
-                                    "label": label, "caption": caption,
+                                    "label": label, "keyword": keyword,
+                                    "caption": caption,
                                     "t": round(t, 1), "qc": qc})
                 status = "ok" if not failed else "partial"
                 all_frames.extend(results)
@@ -382,10 +415,10 @@ def main(argv=None):
                 touched_pages.add(page_no)
                 print(json.dumps({"page": page_no, "part": part, "frames": results,
                                   "failed": failed, "status": status},
-                                 ensure_ascii=False), flush=True)
+                                 ensure_ascii=True), flush=True)
             except Exception as e:
                 print(json.dumps({"page": page_no, "status": "error", "error": str(e)},
-                                 ensure_ascii=False), flush=True)
+                                 ensure_ascii=True), flush=True)
             finally:
                 if video is not local_media:
                     video.unlink(missing_ok=True)
