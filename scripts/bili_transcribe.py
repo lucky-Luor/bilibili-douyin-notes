@@ -113,23 +113,121 @@ def detect_device(device: str) -> str:
     return "cpu"
 
 
-def transcribe(audio_path: Path, model_size: str, lang: str | None,
-               device: str = "auto", backend: str = "faster-whisper") -> str:
-    if backend != "faster-whisper":
-        raise NotImplementedError(
-            f"暂不支持的 ASR 后端: {backend}（当前仅实现 faster-whisper）")
+_MODEL_CHAIN = {"large-v3": ["large-v3", "medium", "small"],
+                "large": ["large", "medium", "small"],
+                "medium": ["medium", "small"]}
+_MODEL_STATE = {}  # 进程内缓存：多分P只加载一次模型
+
+
+def resolve_model_chain(model_size: str) -> list[str]:
+    """模型降级链：高阶模型加载失败时逐级落到 small。"""
+    return list(_MODEL_CHAIN.get(model_size, [model_size]))
+
+
+def _cfg(key: str, default: str) -> str:
+    try:
+        return (json.loads(CONFIG.read_text(encoding="utf-8")).get(key) or default)
+    except Exception:
+        return default
+
+
+def _cpu_threads() -> int:
+    try:
+        n = int(json.loads(CONFIG.read_text(encoding="utf-8")).get("asr_cpu_threads") or 0)
+        if n > 0:
+            return n
+    except Exception:
+        pass
+    return min(os.cpu_count() or 4, 8)
+
+
+def _build_prompt(lang: str | None, terms: list[str] | None) -> str | None:
+    """initial_prompt：语言引导 + 用户术语偏好（词表正确词，转写时就写对）。"""
+    parts = []
+    if lang == "zh":
+        parts.append("以下是普通话的简体中文转写。")
+    if terms:
+        parts.append("常听术语：" + "、".join(terms[:20]))
+    return " ".join(parts) or None
+
+
+def load_model(model_size: str, device: str = "auto") -> dict:
+    """加载模型（降级链 + 进程内缓存）。返回状态 dict，含
+    model_used/device_used/batched/fallback_reasons——每次落级都记录原因，绝不静默。"""
+    key = (model_size, device)
+    if _MODEL_STATE.get("key") == key:
+        return _MODEL_STATE
     if model_cached(model_size):
         os.environ["HF_HUB_OFFLINE"] = "1"
     from faster_whisper import WhisperModel
-    device = detect_device(device)
-    if device == "cuda":
-        model = WhisperModel(model_size, device="cuda", compute_type="float16")
-    else:
-        model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    # initial_prompt 引导 whisper 输出简体中文，避免转成繁体
-    prompt = "以下是普通话的简体中文转写。" if lang == "zh" else None
-    segments, info = model.transcribe(str(audio_path), language=lang,
-                                      initial_prompt=prompt, vad_filter=True)
+    meta = {"model_used": model_size, "device_used": detect_device(device),
+            "fallback_reasons": []}
+    model = None
+    for i, size in enumerate(resolve_model_chain(model_size)):
+        try:
+            if meta["device_used"] == "cuda":
+                try:
+                    model = WhisperModel(size, device="cuda", compute_type="float16",
+                                         cpu_threads=_cpu_threads())
+                except Exception as e:
+                    meta["fallback_reasons"].append(f"cuda 加载失败({e})，回退 cpu int8")
+                    meta["device_used"] = "cpu"
+                    model = WhisperModel(size, device="cpu", compute_type="int8",
+                                         cpu_threads=_cpu_threads())
+            else:
+                model = WhisperModel(size, device="cpu", compute_type="int8",
+                                     cpu_threads=_cpu_threads())
+            meta["model_used"] = size
+            if i:
+                meta["fallback_reasons"].append(f"模型 {model_size} 加载失败，降级为 {size}")
+            break
+        except Exception as e:
+            meta["fallback_reasons"].append(f"{size} 加载失败: {e}")
+            if size == "small":
+                raise
+    # 批量推理：可用则用（CPU 上约 1.5~2x），导入/构建失败回退逐段
+    try:
+        from faster_whisper import BatchedInferencePipeline
+        pipeline = BatchedInferencePipeline(model=model)
+
+        def transcriber(audio_path, language, prompt):
+            return pipeline.transcribe(str(audio_path), language=language,
+                                       initial_prompt=prompt, vad_filter=True,
+                                       batch_size=8)
+        batched = True
+    except Exception as e:
+        meta["fallback_reasons"].append(f"批量推理不可用({e})，回退逐段转写")
+
+        def transcriber(audio_path, language, prompt):
+            return model.transcribe(str(audio_path), language=language,
+                                    initial_prompt=prompt, vad_filter=True)
+        batched = False
+    meta.update({"key": key, "model": model, "transcriber": transcriber,
+                 "batched": batched})
+    _MODEL_STATE.clear()
+    _MODEL_STATE.update(meta)
+    return _MODEL_STATE
+
+
+def transcribe(audio_path: Path, model_size: str, lang: str | None,
+               device: str = "auto", backend: str = "faster-whisper",
+               terms: list[str] | None = None) -> str:
+    if backend != "faster-whisper":
+        raise NotImplementedError(
+            f"暂不支持的 ASR 后端: {backend}（当前仅实现 faster-whisper）")
+    state = load_model(model_size, device)
+    prompt = _build_prompt(lang, terms)
+    try:
+        segments, info = state["transcriber"](audio_path, lang, prompt)
+    except Exception:
+        if not state["batched"]:
+            raise
+        # 批量推理运行期失败 → 回退逐段（"没有就用下级代替"）
+        state["fallback_reasons"].append("批量推理运行期失败，本次回退逐段转写")
+        state["batched"] = False
+        segments, info = state["model"].transcribe(str(audio_path), language=lang,
+                                                   initial_prompt=prompt,
+                                                   vad_filter=True)
     lines = [f"[{int(s.start) // 60:02d}:{int(s.start) % 60:02d}] {s.text.strip()}"
              for s in segments if s.text.strip()]
     return "\n".join(lines)
@@ -173,12 +271,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("meta", help="bili_fetch.py 生成的 metadata.json 路径")
     ap.add_argument("--page", type=int, default=0, help="只处理第N个分P（1开始），默认处理所有")
-    ap.add_argument("--model", default="small",
-                    help="faster-whisper 模型: tiny/base/small/medium/large-v3（默认small）")
+    ap.add_argument("--model", default=None,
+                    help="faster-whisper 模型: tiny/base/small/medium/large-v3"
+                         "（默认取 config.json asr_model，再默认 small；高阶模型加载"
+                         "失败自动降一档直到 small）")
     ap.add_argument("--lang", default="zh", help="语言，zh=中文，auto=自动检测（默认zh）")
-    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"],
-                    help="推理设备：auto=自动检测CUDA（默认），cpu, cuda")
+    ap.add_argument("--device", default=None, choices=["auto", "cpu", "cuda"],
+                    help="推理设备：auto=自动检测CUDA（默认取 config.json asr_device）；"
+                         "cuda 加载失败自动回退 cpu int8")
     args = ap.parse_args()
+
+    model_size = args.model or _cfg("asr_model", "small")
+    device_pref = args.device or _cfg("asr_device", "auto")
+    try:  # S4：用户术语偏好注入 initial_prompt（转写时就写对）
+        from apply_glossary import top_terms
+        terms = top_terms(limit=20)
+    except Exception:
+        terms = None
 
     meta_path = Path(args.meta)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -201,12 +310,20 @@ def main():
                 audio = outdir / p["media_path"]
             else:
                 download_audio(meta["bvid"], p["cid"], audio, cookie)
-            text = transcribe(audio, args.model, lang, args.device)
+            text = transcribe(audio, model_size, lang, device_pref, terms=terms)
+            state = _MODEL_STATE  # load_model 已在 transcribe 内缓存
             atomic_write_text(out_file, text)
             mark_done(out_file)  # M6：写 <txt>.done 完成标记
+            if state.get("fallback_reasons"):
+                for reason in state["fallback_reasons"]:
+                    print(f"警告: {reason}", file=sys.stderr)  # 落级可审计，不静默
             print(json.dumps({"page": p["page"], "part": p["part"],
                               "file": str(out_file), "chars": len(text),
-                              "device": detect_device(args.device),
+                              "model_used": state.get("model_used"),
+                              "device_used": state.get("device_used"),
+                              "batched": state.get("batched"),
+                              "terms_injected": bool(terms),
+                              "fallback_reasons": state.get("fallback_reasons", []),
                               "status": "ok"}, ensure_ascii=True), flush=True)
         except Exception as e:
             print(json.dumps({"page": p["page"], "part": p["part"],
