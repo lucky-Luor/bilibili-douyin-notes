@@ -42,7 +42,7 @@ python "<skill安装目录>/scripts/douyin_fetch.py" "<链接或口令>" "<工�
 - 两个脚本都自动生成 `<输出目录>/metadata.json`，stdout 最后一行是 JSON 摘要。
 - **B站**：每个分P的字幕 `.txt`（带 `[mm:ss]` 时间戳），按摘要里每个分P的 **`subtitle_detail` 字段四态分流**：
   - `cc` / `ai` → 已拿到官方/AI字幕，直接进入第三步生成笔记；
-  - `none` → 该分P确实没有字幕，直接进入第二步 ASR，不用再折腾；
+  - `none` → 该分P确实没有字幕，直接进入第二步 ASR，不用再折腾；**但若摘要带 `hint_optional`（未配置登录态时可能出现），转述给用户**：「若该视频本应有 AI 字幕，可扫码登录（`--login`）后重跑，通常能跳过语音识别」——由用户判断要不要扫，不强制；
   - `api_empty` → 接口没返回可用字幕URL（`sessdata_loaded:false` 时常见，AI字幕需要登录）：**主动询问用户「要现在扫码登录B站吗？」，确认后代跑 `python "<skill安装目录>/scripts/bili_fetch.py" --login`（终端出二维码，B站App扫码即登录，SESSDATA 自动写入 config.json）后重跑一次 fetch**；用户拒绝或重跑后仍是 `api_empty` 才走第二步 ASR 兜底；
   - `error` → 查看摘要里的 error 信息（可能是视频失效/风控），重试一次或直接告知用户。
 - **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（无水印，本地已存在则跳过下载），无字幕，直接进入第二步 ASR。

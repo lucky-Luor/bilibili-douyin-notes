@@ -385,6 +385,13 @@ def main():
                           "推荐：python scripts/bili_fetch.py --login 扫码登录后重跑；"
                           "无 B站 App 时按 README「获取 SESSDATA」手动填写 config.json")
         print("提示: " + report["hint"], file=sys.stderr)
+    elif not sessdata and any(e.get("subtitle_detail") == "none" for e in report["pages"]):
+        # 盲区修补：未登录时 B站接口连字幕轨信息都不返回，全部判 none（可能真没字幕，
+        # 也可能只是没登录看不到 AI 字幕轨）——给轻提示，要不要扫码交给用户判断
+        report["hint_optional"] = ("本次未配置登录态，字幕轨信息可能不完整；若该视频本应有"
+                                   " AI 字幕，可运行 python scripts/bili_fetch.py --login"
+                                   " 扫码后重跑，通常能直接跳过语音识别（快 10 倍以上）")
+        print("提示: " + report["hint_optional"], file=sys.stderr)
 
     print_json_summary(report)
 
