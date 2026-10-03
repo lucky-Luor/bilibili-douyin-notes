@@ -9,10 +9,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.12"]
 
     steps:
@@ -35,3 +36,8 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+      # M5 回归防线：-X utf8 下父进程强制 UTF-8，若子进程测试漏指定
+      # encoding，在 cp936 的 windows runner 上会立刻暴露
+      - name: Run tests under -X utf8
+        run: python -X utf8 -m pytest tests/ -q
