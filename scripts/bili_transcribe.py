@@ -14,7 +14,8 @@
       tiny≈75MB / base≈145MB / small≈480MB / medium≈1.5GB，CPU 用 int8
     - 设备自动检测：有 NVIDIA GPU（CUDA 可用）时用 cuda+float16，否则 cpu+int8；
       可用 --device cpu/cuda 强制指定
-    - 输出: <输出目录>/<页码>_<分P名>.txt（[mm:ss] 时间戳格式）
+    - 输出: <输出目录>/<页码>_<分P名>.txt（[mm:ss] 时间戳格式），
+      另写完成标记 <txt路径>.done（M6，转写成功后落盘）
     - stdout 每处理完一个分P输出一行 JSON 进度
 """
 import argparse
@@ -134,13 +135,41 @@ def transcribe(audio_path: Path, model_size: str, lang: str | None,
     return "\n".join(lines)
 
 
+def mark_done(txt_path: Path):
+    """转写成功后写标记文件 <txt路径>.done（JSON 元信息：大小/完成时间/版本）。
+
+    标记文件与 txt 同目录、原子写入；M6 后完成判据以标记文件为准，
+    避免「txt 足够大但其实是上次中断残片」的误判。
+    """
+    info = {"size": txt_path.stat().st_size, "done_at": round(time.time(), 3),
+            "marker_version": 1}
+    atomic_write_text(txt_path.with_name(txt_path.name + ".done"),
+                      json.dumps(info, ensure_ascii=True))
+
+
 def txt_done(outdir: Path, page: dict) -> bool:
-    """转写完成标记：文本文件存在且 >=100 字节（更小的视为上次中断的残片）。"""
+    """转写完成判据（M6）：标记文件 <txt路径>.done 存在即视为完成。
+
+    兼容旧产物：无标记但 txt >= 100 字节视为有效（100 字节阈值逻辑只留在
+    此兼容分支），并自动补写标记；更小的 txt 视为上次中断的残片，需重转。
+    """
     f = outdir / f"{page['page']:02d}_{safe_name(page['part'])}.txt"
-    return f.exists() and f.stat().st_size >= 100
+    if f.with_name(f.name + ".done").exists():
+        return True
+    if f.exists() and f.stat().st_size >= 100:  # 旧产物兼容分支：补写标记
+        try:
+            mark_done(f)
+        except OSError:
+            pass
+        return True
+    return False
 
 
 def main():
+    try:  # Agent 经管道调用时 stdout 可能是 gbk，emoji 标题会炸在最后一行 print
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("meta", help="bili_fetch.py 生成的 metadata.json 路径")
     ap.add_argument("--page", type=int, default=0, help="只处理第N个分P（1开始），默认处理所有")
@@ -161,7 +190,7 @@ def main():
     targets = [p for p in meta["pages"]
                if (args.page == 0 or p["page"] == args.page) and not txt_done(outdir, p)]
     if not targets:
-        print(json.dumps({"status": "nothing_to_do"}, ensure_ascii=False))
+        print(json.dumps({"status": "nothing_to_do"}, ensure_ascii=True))
         return
 
     for p in targets:
@@ -174,14 +203,15 @@ def main():
                 download_audio(meta["bvid"], p["cid"], audio, cookie)
             text = transcribe(audio, args.model, lang, args.device)
             atomic_write_text(out_file, text)
+            mark_done(out_file)  # M6：写 <txt>.done 完成标记
             print(json.dumps({"page": p["page"], "part": p["part"],
                               "file": str(out_file), "chars": len(text),
                               "device": detect_device(args.device),
-                              "status": "ok"}, ensure_ascii=False), flush=True)
+                              "status": "ok"}, ensure_ascii=True), flush=True)
         except Exception as e:
             print(json.dumps({"page": p["page"], "part": p["part"],
                               "status": "error", "error": str(e)},
-                             ensure_ascii=False), flush=True)
+                             ensure_ascii=True), flush=True)
         finally:
             if str(audio) == str(outdir / f".audio_{p['page']:02d}.m4s"):
                 audio.unlink(missing_ok=True)  # 仅清理临时下载的音频，保留平台视频缓存
