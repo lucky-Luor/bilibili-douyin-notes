@@ -1,34 +1,308 @@
 {
-  "_说明": "faster-whisper 转写技术术语常见错法 → 正确写法。生成笔记前用本表对照校正转写稿；本表来自真实 JavaEE 课程 ASR 结果，欢迎按同样格式补充",
-  "_用法": "对每个转写稿 grep 词表左侧写法（区分大小写不敏感），命中即在生成笔记时按右侧正确写法理解/替换；词表未覆盖的新错法请按 '错法→正确写法' 补进 map",
-  "map": {
-    "art component": "@Component",
-    "Stutter": "Starter",
-    "Latty": "Netty",
-    "加瓦一": "JavaEE",
-    "Y211": "JavaEE",
-    "全线": "权限（Reactive权限例子语境）",
-    "挖包": "war包",
-    "哇包": "war包",
-    "哇巴": "war包",
-    "佛界": "facade（SLF4J门面）",
-    "兵队下": "beans",
-    "冰对象": "beans",
-    "奥特瓦德": "Aware",
-    "awell": "Aware",
-    "Accurate": "actuator",
-    "matrix": "metrics（监控语境）",
-    "BinFacture": "BeanFactory",
-    "bingfactory": "BeanFactory",
-    "Bin Factory": "BeanFactory",
-    "ApplicationContacts": "ApplicationContext",
-    "克龙": "clone",
-    "购语言": "Go语言",
-    "购语": "Go语言",
-    "忘的级别": "warn 级别",
-    "搬运工": "SLF4J（门面模式的比喻）",
-    "print line": "println",
-    "printline": "println",
-    "log 4j": "log4j"
-  }
+  "schema_version": 2,
+  "_说明": "faster-whisper 转写术语常见错法 → 正确写法（用户术语偏好档案 schema v2）。生成笔记前用本表对照校正转写稿；本表来自真实 JavaEE 课程 ASR 结果。",
+  "_用法": "python scripts/apply_glossary.py 转写.txt [--categories 编程,通用] [--dry-run|--apply]；--list 按类别查看；--add \"错法=正确词\" --category 编程 [--candidate] 入库；--promote \"错法\" 把候选转正。--apply 替换命中时 hits 自动 +1（top_terms 按此排序注入转写 initial_prompt）。个人词条请放用户层（<输出目录>/glossary.user.json 或 ~/.zcode/bdn-glossary.user.json），本文件不装个人数据；词条值也可用字符串简写（读取时自动归一化）；disabled:true 停用不删。",
+  "categories": {
+    "编程": {
+      "art component": {
+        "correct": "@Component",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "Stutter": {
+        "correct": "Starter",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "Latty": {
+        "correct": "Netty",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "加瓦一": {
+        "correct": "JavaEE",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "Y211": {
+        "correct": "JavaEE",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "全线": {
+        "correct": "权限（Reactive权限例子语境）",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "挖包": {
+        "correct": "war包",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "哇包": {
+        "correct": "war包",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "哇巴": {
+        "correct": "war包",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "佛界": {
+        "correct": "facade（SLF4J门面）",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "兵队下": {
+        "correct": "beans",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "冰对象": {
+        "correct": "beans",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "奥特瓦德": {
+        "correct": "Aware",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "awell": {
+        "correct": "Aware",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "Accurate": {
+        "correct": "actuator",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "matrix": {
+        "correct": "metrics（监控语境）",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "BinFacture": {
+        "correct": "BeanFactory",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "bingfactory": {
+        "correct": "BeanFactory",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "Bin Factory": {
+        "correct": "BeanFactory",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "ApplicationContacts": {
+        "correct": "ApplicationContext",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "克龙": {
+        "correct": "clone",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "购语言": {
+        "correct": "Go语言",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "购语": {
+        "correct": "Go语言",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "忘的级别": {
+        "correct": "warn 级别",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "搬运工": {
+        "correct": "SLF4J（门面模式的比喻）",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "print line": {
+        "correct": "println",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "printline": {
+        "correct": "println",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "log 4j": {
+        "correct": "log4j",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "GPD6": {
+        "correct": "GPT6",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "GPD7": {
+        "correct": "GPT7",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "GP6": {
+        "correct": "GPT6",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "Gmini": {
+        "correct": "Gemini",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "Codec": {
+        "correct": "Codex（OpenAI编码代理语境）",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "反攻": {
+        "correct": "返工（软件工程语境）",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      }
+    },
+    "美食": {},
+    "游戏": {},
+    "通用": {
+      "祸心你": {
+        "correct": "和稀泥",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "祸心": {
+        "correct": "和稀泥",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "办址": {
+        "correct": "榜单",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "唐寅街": {
+        "correct": "唐宁街",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "千起年": {
+        "correct": "千禧年",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "证确性": {
+        "correct": "正确性",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "取锁": {
+        "correct": "取舍",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "评位": {
+        "correct": "品位",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "评用": {
+        "correct": "平庸（语境：平庸的方案）",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "平分": {
+        "correct": "评分",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "教验": {
+        "correct": "校验",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "跑片": {
+        "correct": "跑偏",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "伤去": {
+        "correct": "商榷",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "铲出": {
+        "correct": "产出",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "skew": {
+        "correct": "skill",
+        "hits": 0,
+        "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      }
+    }
+  },
+  "candidates": {}
 }

@@ -1,0 +1,20 @@
+{
+  "_说明": "用户术语偏好档案（用户层词表）示例。复制本文件到下面的放置位置之一并改名，即自动生效；用户层不进 git。",
+  "_放置位置": "① <笔记输出目录>/glossary.user.json（跟输出目录走，优先） 或 ② ~/.zcode/bdn-glossary.user.json（全局生效）。运行 apply_glossary.py 不带 --glossary 时，自动叠加到仓库词表 references/asr-glossary.json 之上，同键以本文件为准；--glossary 显式指定时只读指定词表、不叠加本文件。",
+  "_维护方式": "python scripts/apply_glossary.py --add \"错法=正确词\" --category 编程 --user [--candidate] 入库；候选确认无误后 --promote \"错法\" 转正；--list 查看现状。",
+  "_字段": "correct=正确写法（可带括号语境说明，替换时只取括号前主词）；hits=替换命中次数（--apply 自动累加，转写 initial_prompt 注入按此优先）；source=来源；disabled=true=停用（保留历史不再参与）。",
+  "schema_version": 2,
+  "categories": {
+    "编程": {
+      "例错法": { "correct": "例正确词（语境说明）", "hits": 0, "source": "manual:2026-10-02", "disabled": false }
+    },
+    "美食": {},
+    "游戏": {},
+    "通用": {}
+  },
+  "candidates": {
+    "编程": {
+      "例候选错法": { "correct": "例候选正确词", "hits": 0, "source": "manual:2026-10-02" }
+    }
+  }
+}
