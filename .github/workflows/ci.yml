@@ -31,8 +31,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy pillow pytest
 
+      # Windows shell 不展开通配符，用 compileall 递归编译（等价于 py_compile scripts/*.py）
       - name: Syntax check all scripts
-        run: python -m py_compile scripts/*.py
+        run: python -m compileall -q scripts
 
       - name: Run tests
         run: pytest tests/ -v
