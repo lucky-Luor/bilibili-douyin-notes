@@ -5,6 +5,7 @@
 用法:
     python bili_fetch.py <视频链接或BV号> [输出目录]
     python bili_fetch.py --probe <视频链接或BV号>   # 只探元数据（不抓字幕/不写文件）
+    python bili_fetch.py --login                    # 扫码登录，SESSDATA 自动写入 config.json
 
 输出:
     <输出目录>/metadata.json   视频元数据（标题、UP主、分P列表等）
@@ -39,6 +40,119 @@ def load_sessdata() -> str:
         return (json.loads(CONFIG.read_text(encoding="utf-8")).get("SESSDATA") or "").strip()
     except Exception:
         return ""
+
+
+LOGIN_DOC = """B站扫码登录：用 B站 App 扫描终端二维码，SESSDATA 自动写入 config.json。
+二维码过期会自动换新；180 秒未完成则超时。无 B站 App 时按 README「获取 SESSDATA」手动填写。"""
+
+PASSPORT = "https://passport.bilibili.com"
+
+
+def _cookies_from_set_cookie(raw_list) -> dict:
+    """从 Set-Cookie 头列表解析 {name: value}（仅取首对 k=v，丢弃属性）。"""
+    cookies = {}
+    for raw in raw_list or []:
+        k, _, v = raw.partition("=")
+        cookies[k.strip()] = v.split(";", 1)[0]
+    return cookies
+
+
+def _qrcode_generate() -> tuple[str, str]:
+    data = api(f"{PASSPORT}/x/passport-login/web/qrcode/generate")["data"]
+    return data["qrcode_key"], data["url"]
+
+
+def _poll_qrcode(qrcode_key: str) -> tuple[int, dict]:
+    """轮询扫码状态。返回 (code, cookies)。
+    code: 0=成功(cookies 含 SESSDATA) / 86101=未扫 / 86090=已扫未确认 / 86038=过期"""
+    req = urllib.request.Request(
+        f"{PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key={qrcode_key}",
+        headers={"User-Agent": UA, "Referer": "https://www.bilibili.com/"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    return (body.get("data") or {}).get("code"), _cookies_from_set_cookie(
+        resp.headers.get_all("Set-Cookie"))
+
+
+def _render_qr(url: str) -> str | None:
+    """终端 ASCII 渲染二维码；失败则落 PNG；再失败返回 None（引导手动路径）。"""
+    try:
+        import qrcode
+    except ImportError:
+        print("提示: 未安装 qrcode 库（pip install qrcode），无法终端渲染二维码", file=sys.stderr)
+        return None
+    try:
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.print_ascii(invert=True)
+        return "ascii"
+    except Exception:
+        try:
+            import tempfile
+            path = Path(tempfile.gettempdir()) / "bdn-login-qr.png"
+            qrcode.make(url).save(path)
+            print(f"二维码图片已保存: {path}", file=sys.stderr)
+            return str(path)
+        except Exception:
+            return None
+
+
+def _save_sessdata(sessdata: str) -> None:
+    """只更新 SESSDATA 字段，保留 config.json 其他配置；原子写。"""
+    try:
+        cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    cfg["SESSDATA"] = sessdata
+    tmp = CONFIG.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, CONFIG)
+
+
+def _nav_name(sessdata: str) -> str:
+    """登录态回显账号昵称；失败返回空串不阻塞。"""
+    try:
+        headers = {"User-Agent": UA}
+        if sessdata:
+            headers["Cookie"] = f"SESSDATA={sessdata}"
+        req = urllib.request.Request("https://api.bilibili.com/x/web-interface/nav",
+                                     headers=headers)
+        data = json.loads(urllib.request.urlopen(req, timeout=10).read().decode("utf-8"))
+        return (data.get("data") or {}).get("uname") or ""
+    except Exception:
+        return ""
+
+
+def login() -> None:
+    """扫码登录：二维码 → 轮询 → SESSDATA 自动写入 config.json。"""
+    _reconfigure_stdout()
+    print(LOGIN_DOC, file=sys.stderr)
+    key, url = _qrcode_generate()
+    if not _render_qr(url):
+        raise SystemExit("二维码渲染失败：pip install qrcode 后重试，"
+                         "或按 README「获取 SESSDATA」手动填写 config.json")
+    state, deadline = "", time.time() + 180
+    while time.time() < deadline:
+        code, cookies = _poll_qrcode(key)
+        if code == 0:
+            sess = cookies.get("SESSDATA", "")
+            if not sess:
+                raise SystemExit("登录成功但未取到 SESSDATA cookie，请重试或走手动路径")
+            _save_sessdata(sess)
+            who = _nav_name(sess)
+            print(f"登录成功：{who or 'B站账号'}，SESSDATA 已写入 {CONFIG}", file=sys.stderr)
+            print("提醒: config.json 含登录凭据，请勿分享；B站重新登录后旧值会失效",
+                  file=sys.stderr)
+            print_json_summary({"status": "ok", "action": "login", "user": who})
+            return
+        if code == 86038:  # 二维码过期：自动换新，无需重跑
+            key, url = _qrcode_generate()
+            print("二维码已过期，已自动刷新，请重新扫码", file=sys.stderr)
+        elif code == 86090 and state != "scanned":
+            state = "scanned"
+            print("已扫码，请在手机上确认登录…", file=sys.stderr)
+        time.sleep(2)
+    raise SystemExit("超时：180 秒内未完成扫码登录，可重新运行本命令")
 
 
 def http_get(url: str, cookie: str = "", retries: int = RETRIES) -> bytes:
@@ -184,8 +298,11 @@ def safe_name(name: str) -> str:
 
 def main():
     _reconfigure_stdout()
-    argv = [a for a in sys.argv[1:] if a != "--probe"]
+    argv = [a for a in sys.argv[1:] if a not in ("--probe", "--login")]
     probe_only = len(argv) != len(sys.argv) - 1
+    if "--login" in sys.argv[1:]:
+        login()
+        return
     if not argv:
         raise SystemExit(__doc__)
     source = argv[0]
@@ -261,6 +378,13 @@ def main():
         mp["subtitle_lang"] = e.get("lan")
         mp["subtitle_url"] = e.get("subtitle_url")
     atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+
+    # 字幕轨在但拿不到 URL：几乎总是登录态问题——给出可执行的下一步（--login 扫码）
+    if any(e.get("subtitle_detail") == "api_empty" for e in report["pages"]):
+        report["hint"] = ("有分P出现字幕轨但拿不到URL，通常需要登录态。"
+                          "推荐：python scripts/bili_fetch.py --login 扫码登录后重跑；"
+                          "无 B站 App 时按 README「获取 SESSDATA」手动填写 config.json")
+        print("提示: " + report["hint"], file=sys.stderr)
 
     print_json_summary(report)
 
