@@ -96,3 +96,19 @@ def test_pick_video_url_none_raises():
 
 def test_safe_name():
     assert douyin_fetch.safe_name("标题/带*非法") == "标题_带_非法"
+
+
+# ---------- note_type_for（规格 §4.4 坑③：metadata.suggested_note_type） ----------
+
+def test_note_type_short_for_short_single_page():
+    assert douyin_fetch.note_type_for(300, 1) == "short"
+
+
+def test_note_type_lecture_for_long_or_multi_page():
+    assert douyin_fetch.note_type_for(900, 1) == "lecture"   # 长时长单P也是 lecture
+    assert douyin_fetch.note_type_for(300, 2) == "lecture"   # 短时长多P也是 lecture
+
+
+def test_note_type_boundary_600s():
+    assert douyin_fetch.note_type_for(600, 1) == "short"
+    assert douyin_fetch.note_type_for(601, 1) == "lecture"

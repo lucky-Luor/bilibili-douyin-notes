@@ -85,6 +85,13 @@ def fmt_ts(sec) -> str:
     return f"{sec // 60:02d}:{sec % 60:02d}"
 
 
+def note_type_for(duration_sec, page_count) -> str:
+    """建议笔记型别（规格 §4.4 坑③）：short 当且仅当 总时长 ≤600s 且 分P数 == 1，
+    否则 lecture。分P数只做 tiebreak，不作主判据。脚本只给建议，
+    Agent 可在笔记 frontmatter 的 note_type 覆盖，门禁只读 frontmatter。"""
+    return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"
+
+
 def subtitle_to_text(sub_json: dict) -> str:
     return "\n".join(f"[{fmt_ts(it['from'])}] {it['content']}"
                      for it in sub_json.get("body", []))
@@ -128,21 +135,37 @@ def fetch_subtitles(bvid: str, cid: int, cookie: str) -> tuple[list, bool]:
     return [], saw_track
 
 
+def _reconfigure_stdout() -> None:
+    """stdout 兜底为 UTF-8：Agent 管道调用时编码常是 gbk/cp936，
+    emoji 标题会让 print 直接 UnicodeEncodeError（第三轮复检 M3）。"""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def print_json_summary(obj: dict, **kw) -> None:
+    """stdout 机器可读 JSON 摘要行。ensure_ascii=True：即便兜底失效、
+    遇到 GBK 管道也不会崩——JSON 转义无损，下游 json.loads 照样还原 emoji。"""
+    print(json.dumps(obj, ensure_ascii=True, **kw))
+
+
 def probe(bvid: str):
     """--probe 模式：只调 view 接口拿元数据并输出 JSON，不抓字幕、不建目录、不写文件。"""
     info = api(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}")["data"]
     pages = [{"page": p["page"], "part": p["part"], "cid": p["cid"],
               "duration": p["duration"]} for p in info["pages"]]
     total = info.get("duration") or sum(p["duration"] for p in pages)
-    print(json.dumps({
+    print_json_summary({
         "bvid": bvid,
         "title": info["title"],
         "owner": info["owner"]["name"],
         "pages": pages,
         "duration": total,
+        "suggested_note_type": note_type_for(total, len(pages)),
         # faster-whisper CPU int8 转写约为音频时长的 2 倍（实测经验值）
         "estimated_asr_minutes": round(total * 2 / 60, 1),
-    }, ensure_ascii=False))
+    })
 
 
 def pick_subtitle(subtitles: list) -> dict | None:
@@ -160,6 +183,7 @@ def safe_name(name: str) -> str:
 
 
 def main():
+    _reconfigure_stdout()
     argv = [a for a in sys.argv[1:] if a != "--probe"]
     probe_only = len(argv) != len(sys.argv) - 1
     if not argv:
@@ -177,13 +201,16 @@ def main():
 
     info = api(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}")["data"]
     pages = info["pages"]
+    # 总时长：view 接口已给则直接用；缺失时取各分P时长之和
+    total_duration = info.get("duration") or sum(p.get("duration", 0) for p in pages)
     meta = {
         "bvid": bvid,
         "aid": info["aid"],
         "title": info["title"],
         "owner": info["owner"]["name"],
         "desc": info["desc"],
-        "duration": info["duration"],
+        "duration": total_duration,
+        "suggested_note_type": note_type_for(total_duration, len(pages)),
         "pages": [{"page": p["page"], "part": p["part"], "cid": p["cid"],
                    "duration": p["duration"]} for p in pages],
     }
@@ -191,7 +218,9 @@ def main():
     atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
     report = {"bvid": bvid, "title": meta["title"], "owner": meta["owner"],
-              "outdir": str(outdir), "sessdata_loaded": bool(sessdata), "pages": []}
+              "outdir": str(outdir), "sessdata_loaded": bool(sessdata),
+              "duration": total_duration,
+              "suggested_note_type": meta["suggested_note_type"], "pages": []}
 
     for p in pages:
         page_no, part, cid = p["page"], p["part"], p["cid"]
@@ -233,7 +262,7 @@ def main():
         mp["subtitle_url"] = e.get("subtitle_url")
     atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
-    print(json.dumps(report, ensure_ascii=False))
+    print_json_summary(report)
 
 
 if __name__ == "__main__":

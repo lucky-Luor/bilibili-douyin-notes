@@ -68,6 +68,15 @@ def log(msg: str):
     print(msg, file=sys.stderr, flush=True)
 
 
+def _reconfigure_stdout() -> None:
+    """stdout 兜底为 UTF-8：Agent 管道调用时编码常是 gbk/cp936，
+    emoji 标题会让 print 直接 UnicodeEncodeError（第三轮复检 M3）。"""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def http(url, data=None, headers=None, method=None):
     req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
     return _OPENER.open(req, timeout=60)
@@ -182,7 +191,7 @@ def fetch_aweme_detail(aweme_id: str) -> dict:
             time.sleep(2)
     if not (data or {}).get("aweme_detail"):
         raise RuntimeError(f"detail 接口无 aweme_detail（可能签名算法已失效，见文件头说明）: "
-                           f"{json.dumps(data, ensure_ascii=False)[:300]}")
+                           f"{json.dumps(data, ensure_ascii=True)[:300]}")
     return data["aweme_detail"]
 
 
@@ -230,7 +239,16 @@ def safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip()[:60]
 
 
+def note_type_for(duration_sec, page_count) -> str:
+    """建议笔记型别（规格 §4.4 坑③）：short 当且仅当 总时长 ≤600s 且 分P数 == 1，
+    否则 lecture。分P数只做 tiebreak，不作主判据。脚本只给建议，
+    Agent 可在笔记 frontmatter 的 note_type 覆盖，门禁只读 frontmatter。
+    （与 bili_fetch.note_type_for 同一套判据，抖音视频恒为单分P。）"""
+    return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"
+
+
 def main():
+    _reconfigure_stdout()
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     source = sys.argv[1]
@@ -243,6 +261,7 @@ def main():
     title = (detail.get("desc") or detail.get("item_title") or "抖音视频").strip()
     owner = detail.get("author", {}).get("nickname", "")
     duration_ms = detail.get("video", {}).get("duration") or 0
+    duration_sec = round(duration_ms / 1000)
 
     media = outdir / "media_p01.mp4"
     part = outdir / "media_p01.mp4.part"
@@ -265,21 +284,24 @@ def main():
         "title": title,
         "owner": owner,
         "desc": detail.get("desc", ""),
-        "duration": round(duration_ms / 1000),
+        "duration": duration_sec,
+        "suggested_note_type": note_type_for(duration_sec, 1),
         "pages": [{"page": 1, "part": safe_name(title) or "正片",
-                   "duration": round(duration_ms / 1000),
+                   "duration": duration_sec,
                    "media_path": media.name, "subtitle": False}],
     }
     meta_path = outdir / "metadata.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # ensure_ascii=True：GBK 管道下也不崩，json.loads 后 emoji 照样还原（M3）
     print(json.dumps({
         "platform": "douyin", "video_id": aweme_id, "title": title, "owner": owner,
         "outdir": str(outdir), "media": str(media),
-        "duration_sec": round(duration_ms / 1000),
+        "duration_sec": duration_sec,
+        "suggested_note_type": meta["suggested_note_type"],
         "pages": [{"page": 1, "part": meta["pages"][0]["part"],
                    "subtitle": False, "media_path": media.name}],
-    }, ensure_ascii=False))
+    }, ensure_ascii=True))
 
 
 if __name__ == "__main__":

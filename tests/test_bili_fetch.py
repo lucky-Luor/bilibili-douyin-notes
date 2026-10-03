@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """bili_fetch.py 纯函数与字幕筛选逻辑的离线测试（网络一律 mock）。"""
+import json
 import urllib.request
 
 import pytest
@@ -111,3 +112,46 @@ def test_safe_name_replaces_illegal_chars():
 
 def test_safe_name_truncates():
     assert len(bili_fetch.safe_name("长" * 100)) <= 60
+
+
+# ---------- note_type_for（规格 §4.4 坑③：metadata.suggested_note_type） ----------
+
+def test_note_type_short_for_short_single_page():
+    assert bili_fetch.note_type_for(300, 1) == "short"
+
+
+def test_note_type_lecture_for_long_or_multi_page():
+    assert bili_fetch.note_type_for(900, 3) == "lecture"
+    assert bili_fetch.note_type_for(900, 1) == "lecture"   # 长时长单P也是 lecture
+    assert bili_fetch.note_type_for(300, 2) == "lecture"   # 短时长多P也是 lecture
+
+
+def test_note_type_boundary_600s():
+    assert bili_fetch.note_type_for(600, 1) == "short"
+    assert bili_fetch.note_type_for(601, 1) == "lecture"
+
+
+def _view_data(duration=None, pages=(300,)):
+    data = {"title": "t", "owner": {"name": "u"},
+            "pages": [{"page": i + 1, "part": f"p{i + 1}", "cid": i + 1,
+                       "duration": d} for i, d in enumerate(pages)]}
+    if duration is not None:
+        data["duration"] = duration
+    return {"data": data}
+
+
+def test_probe_reports_suggested_note_type_short(monkeypatch, capsys):
+    monkeypatch.setattr(bili_fetch, "api", lambda url, cookie="": _view_data(300, (300,)))
+    bili_fetch.probe("BV1xx411c7mD")
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["suggested_note_type"] == "short"
+
+
+def test_probe_reports_suggested_note_type_lecture(monkeypatch, capsys):
+    # 多分P：接口未给总时长时取各分P之和（900s），且分P数>1 -> lecture
+    monkeypatch.setattr(
+        bili_fetch, "api", lambda url, cookie="": _view_data(None, (300, 300, 300)))
+    bili_fetch.probe("BV1xx411c7mD")
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["duration"] == 900
+    assert out["suggested_note_type"] == "lecture"
