@@ -432,7 +432,7 @@ V2_BAD_TS_RES = (
 V2_CARD_TITLE_RE = re.compile(
     r"^###\s+(.+?)\s*[（(](核心必考|重点掌握|了解即可)[）)]\s*$")
 V2_CARD_FIELD_RE = re.compile(r"^\s*[-*]\s*(定义|出现|依赖|易混)\s*[：:]\s*(.*)$")
-V2_APPEAR_ITEM_RE = re.compile(r"(\d{1,2})\s*[（(]([^）)]*)[）)]")
+V2_APPEAR_ITEM_RE = re.compile(r"(\d{1,2})\s*(?:[（(]([^）)]*)[）)])?")
 V2_CORRESPOND_RE = re.compile(r"[（(]\s*对应\s*[：:]\s*([^）)]+?)\s*[）)]")
 V2_DETAILS_OPEN_RE = re.compile(r"<details\b", re.IGNORECASE)
 V2_DETAILS_CLOSE_RE = re.compile(r"</details>", re.IGNORECASE)
@@ -689,19 +689,15 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
         "listen_layer_end_line": (listen_end + 1) if listen_end < len(lines) else None,
         "note": "标注行统计只作用于听讲层（## 概念卡片 或 ## 自测题 之前）并跳过代码块（检查5/坑①）"}
 
-    # ---- 检查7：锚点覆盖率分拆（核心必考+重点掌握 ≥0.8；了解即可不参与）[error] ----
+    # ---- 检查7：锚点覆盖率（已取消硬性要求）----
+    # 复习笔记场景（2026-10-04 用户定位）：时间戳是可选装饰，不再要求
+    # 核心必考+重点掌握 行的锚点覆盖率 ≥0.8。出现的时间戳仍受检查6白名单约束。
     core_imp = [a for a in annotations if a["tag"] in ("核心必考", "重点掌握")]
     anchored = sum(1 for a in core_imp if a["anchor"])
-    if core_imp:
-        cov = anchored / len(core_imp)
-        if cov < 0.8:
-            err("7", f"核心必考+重点掌握行的锚点覆盖率为 {anchored}/{len(core_imp)}"
-                     f"（{cov:.0%}），低于 0.8（了解即可行不参与统计）")
-        checks["anchor_coverage"] = {"passed": cov >= 0.8, "anchored": anchored,
-                                     "total": len(core_imp), "ratio": round(cov, 2)}
-    else:
-        checks["anchor_coverage"] = {"passed": None, "anchored": 0, "total": 0,
-                                     "note": "听讲层无 核心必考/重点掌握 行"}
+    checks["anchor_coverage"] = {
+        "passed": None, "anchored": anchored, "total": len(core_imp),
+        "note": "锚点为可选装饰（复习笔记场景），不作覆盖率硬性要求；"
+                "使用的时间戳仍受检查6白名单约束"}
 
     # ---- 检查8：核心必考数量 ≥1 [error] ----
     if n_core < 1:
@@ -821,8 +817,7 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
                     warn("11", f"自测题 {q['no']} 的答案正文超过一行"
                                f"（答案后另有 {q['extra_lines']} 行非空文本）："
                                "答案不应变成第二篇笔记", q["line"])
-                if not q["answer_anchor"]:
-                    warn("11", f"自测题 {q['no']} 的答案缺少 [mm:ss] 证据锚点", q["line"])
+                # 答案锚点已取消要求（复习笔记场景，时间戳为可选装饰）
             if V2_YESNO_RE.search(q["stem"]):
                 warn("11", f"自测题 {q['no']} 疑似 yes/no 题干「{q['stem'][:30]}」",
                      q["line"])
@@ -965,7 +960,7 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
                 items = V2_APPEAR_ITEM_RE.findall(appear[0])
                 if not items:
                     err("L3", f"概念卡「{c['name']}」的「出现」格式非法"
-                              "（应为「小节序号（mm:ss）、小节序号（mm:ss）」）", appear[1])
+                              "（应为「小节序号、小节序号」，时间戳可选）", appear[1])
                 else:
                     secs_seen: list[int] = []
                     for sec, ts in items:
@@ -1027,18 +1022,20 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
                                        "mermaid_blocks": blocks,
                                        "problems": problems}
 
-        # L8：参考时间戳 ≥3 条深链 [warning]
+        # L8：参考时间戳（可选章节，复习笔记场景默认不做）
+        # 用户定位（2026-10-04）：笔记用于课后复习，视频时间导航不作要求；
+        # 用户明确要时间导航时才生成，届时受 L11（NAV 标记）与检查6（白名单）约束。
         nav_head = find_h2_line(lines, "参考时间戳")
         if nav_head is None:
-            warn("L8", "缺少「参考时间戳」章节（lecture 建议保留，深链 ≥3 条）")
-            checks["nav_timestamps"] = {"passed": False, "found": False}
+            checks["nav_timestamps"] = {"passed": None, "found": False,
+                                        "note": "参考时间戳为可选章节，缺失不提示"}
         else:
             nav_end = next_h2_after(lines, nav_head + 1)
             deep = sum(1 for j in range(nav_head + 1, nav_end)
                        if V2_DEEP_LINK_RE.search(lines[j]))
-            if deep < 3:
-                warn("L8", f"「参考时间戳」仅 {deep} 条深链，建议 ≥ 3 条")
-            checks["nav_timestamps"] = {"passed": deep >= 3, "deep_links": deep}
+            checks["nav_timestamps"] = {"passed": None, "found": True,
+                                        "deep_links": deep,
+                                        "note": "可选章节；深链数量仅记录不作要求"}
 
         # L10：核心必考卡片 ⊆ 被（对应：…）覆盖的集合 [error]
         uncovered = [name for name in core_card_names if name not in covered]

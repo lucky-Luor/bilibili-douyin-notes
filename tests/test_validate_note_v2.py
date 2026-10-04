@@ -494,7 +494,7 @@ def test_short_ratio_exempt(tmp_path):
 
 
 def test_understand_level_excluded_from_coverage(tmp_path):
-    """了解即可 行无锚点 → 不影响检查7（不参与统计）。"""
+    """了解即可 行无锚点 → 不影响检查7统计（不参与统计；检查7 已无硬性要求）。"""
     text = lecture_note().replace(
         "- **了解即可** Lombok 的 @RequiredArgsConstructor 可替代手写构造注入",
         "- **了解即可** Lombok 的 @RequiredArgsConstructor 可替代手写构造注入\n"
@@ -502,7 +502,7 @@ def test_understand_level_excluded_from_coverage(tmp_path):
     report = check_v2(tmp_path, text)
     assert errs_of(report, "7") == []
     assert report["checks"]["anchor_coverage"]["total"] == 5  # 2 核心 + 3 重点
-    assert report["checks"]["anchor_coverage"]["ratio"] == 1.0
+    assert report["checks"]["anchor_coverage"]["anchored"] == 5
 
 
 # ==================== 四个坑的回归（§8 必做；坑③ 属 fetch 脚本批次） ====================
@@ -623,8 +623,8 @@ def test_ts_malformed_formats_are_errors(tmp_path):
 
 # ==================== 覆盖率分拆（检查7，§8） ====================
 
-def test_coverage_split_error_even_with_unanchored_understand(tmp_path):
-    """核心必考+重点掌握 3 行中 2 行带锚（0.67）→ error；了解即可无锚拉不动总覆盖率。"""
+def test_coverage_unanchored_lines_no_longer_error(tmp_path):
+    """（2026-10-04 修订）锚点可选：核心必考+重点掌握 3 行中 2 行带锚 → 不再报 error，仅记录。"""
     text = lecture_note().replace(SEC1_TAGS, SEC1_TAGS_COVER_BAD)
     # 第二节降级：核心必考行删除、重点掌握改为无锚了解即可，使统计只剩 3 条（2 带锚）
     text = text.replace(
@@ -636,10 +636,10 @@ def test_coverage_split_error_even_with_unanchored_understand(tmp_path):
         "- **重点掌握** 容器启动流程分为扫描、注册、实例化三步 [17:10]",
         "- **了解即可** 容器启动流程分为扫描、注册、实例化三步")
     report = check_v2(tmp_path, text)
-    e7 = errs_of(report, "7")
-    assert len(e7) == 1
-    assert "2/3" in e7[0]["message"]
-    assert report["ok"] is False
+    assert errs_of(report, "7") == []
+    assert report["checks"]["anchor_coverage"]["anchored"] == 2
+    assert report["checks"]["anchor_coverage"]["total"] == 3
+    assert report["ok"] is True
 
 
 def test_coverage_split_pass_with_unanchored_understand(tmp_path):
@@ -791,12 +791,13 @@ def test_quiz_answer_multiline_warns(tmp_path):
     assert any("超过一行" in w["message"] for w in warns_of(report, "11"))
 
 
-def test_quiz_answer_without_anchor_warns(tmp_path):
+def test_quiz_answer_without_anchor_no_longer_warns(tmp_path):
+    """（2026-10-04 修订）答案锚点可选：无锚点答案不再提示。"""
     text = lecture_note().replace(
         "**答案：** ApplicationContext 在启动时预实例化全部单例，配置错误启动即暴露。[16:02]",
         "**答案：** ApplicationContext 在启动时预实例化全部单例，配置错误启动即暴露。")
     report = check_v2(tmp_path, text)
-    assert any("缺少 [mm:ss] 证据锚点" in w["message"] for w in warns_of(report, "11"))
+    assert all("证据锚点" not in w["message"] for w in warns_of(report, "11"))
 
 
 def test_quiz_yesno_stem_warns(tmp_path):
@@ -885,22 +886,26 @@ def test_l7_mindmap_needs_two_indent_levels(tmp_path):
     assert any("缩进" in e["message"] for e in errs_of(report, "L7"))
 
 
-def test_l8_missing_nav_timestamps_warns(tmp_path):
+def test_l8_missing_nav_timestamps_optional(tmp_path):
+    """（2026-10-04 修订）参考时间戳为可选章节：缺失不再提示，仅记录。"""
     text = lecture_note()
     # 连 NAV 标记一起去掉（整个尾部区块）
     idx = text.index("<!-- NAV:BEGIN")
     text = text[:idx].rstrip() + "\n"
     report = check_v2(tmp_path, text)
-    assert warns_of(report, "L8")
+    assert warns_of(report, "L8") == []
+    assert report["checks"]["nav_timestamps"]["found"] is False
 
 
-def test_l8_few_deep_links_warns(tmp_path):
+def test_l8_deep_links_recorded_not_warned(tmp_path):
+    """（2026-10-04 修订）有参考时间戳时深链数量仅记录，不作 ≥3 要求。"""
     text = lecture_note().replace(
         "- [16:02](https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=962) 核心必考：ApplicationContext\n",
         "- 16:02 核心必考：ApplicationContext\n")
     report = check_v2(tmp_path, text)
-    w8 = warns_of(report, "L8")
-    assert any("深链" in w["message"] for w in w8)
+    assert warns_of(report, "L8") == []
+    assert report["checks"]["nav_timestamps"]["found"] is True
+    assert report["checks"]["nav_timestamps"]["deep_links"] == 2  # 原3条去掉1条
 
 
 def test_l11_nav_markers_present_passes(tmp_path):
@@ -1020,3 +1025,17 @@ def test_check14_reused_in_v2(tmp_path):
     report = check_v2(tmp_path, text)
     w14 = warns_of(report, "14")
     assert w14 and "循环依赖" in w14[0]["message"]
+
+
+# ==================== 复习场景适配（2026-10-04）：时间戳降为可选装饰 ====================
+
+def test_appear_without_timestamps_ok(tmp_path):
+    """「出现」可只写小节序号不带时刻 → 不再报 L3/L4。"""
+    text = lecture_note()
+    text = text.replace("- 出现：1（08:45）、2（16:02）", "- 出现：1、2")
+    text = text.replace("- 出现：1（09:30）、2（16:02）", "- 出现：1、2")
+    text = text.replace("- 出现：1（15:40）、2（16:30）", "- 出现：1、2")
+    report = check_v2(tmp_path, text)
+    assert errs_of(report, "L3") == []
+    assert errs_of(report, "L4") == []
+    assert report["ok"] is True
