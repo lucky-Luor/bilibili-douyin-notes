@@ -207,6 +207,60 @@
         "hits": 0,
         "source": "seed:JavaEE课程ASR",
         "disabled": false
+      },
+      "到牌锁引": {
+        "correct": "倒排索引",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "到牌所引": {
+        "correct": "倒排索引",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "到排锁引": {
+        "correct": "倒排索引",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "正牌锁引": {
+        "correct": "正排索引",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "自断": {
+        "correct": "字段",
+        "hits": 2,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "句合": {
+        "correct": "聚合",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "键表语句": {
+        "correct": "建表语句",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "美举值": {
+        "correct": "枚举值",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
+      },
+      "文道": {
+        "correct": "文档",
+        "hits": 1,
+        "source": "manual:2026-10-03",
+        "disabled": false
       }
     },
     "美食": {},
