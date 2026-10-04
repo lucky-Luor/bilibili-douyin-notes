@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""bilibili-douyin-notes 第三步（可选）：按转写稿时间戳抽取视频重点截图。
+"""bilibili-douyin-notes 第二步半（可选）：按转写稿时间戳抽取视频重点截图。
 
 用法:
     python bili_screenshot.py <metadata.json路径> <转写txt所在目录> <截图输出目录> [页码,页码] [--ascii-names]

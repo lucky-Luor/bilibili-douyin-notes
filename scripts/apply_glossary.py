@@ -220,6 +220,7 @@ def resolve_user_glossary_path(files, create: bool = False) -> Path | None:
     return None
 
 
+# v1 词表兼容路径（生产流程不再调用；行为由 tests/test_apply_glossary.py 钉住）
 def flatten_data(data: dict, categories=None) -> dict[str, str]:
     """v2 数据扁平化为 {错法: 正确词(主词)}（disabled 跳过），供兼容入口/测试。"""
     official, _, _ = collect_entries([{"path": None, "data": data}], categories)
@@ -283,6 +284,7 @@ def build_pattern_from_keys(keys) -> re.Pattern:
     return re.compile("|".join(re.escape(k) for k in keys), re.IGNORECASE)
 
 
+# v1 词表兼容路径（生产流程不再调用；行为由 tests/test_apply_glossary.py 钉住）
 def build_pattern(glossary: dict[str, str]) -> re.Pattern:
     """兼容入口：扁平 {错法: 正确词} 构造匹配正则。"""
     return build_pattern_from_keys(glossary.keys())
@@ -383,6 +385,7 @@ def process_file_v2(path: Path, compiled: dict, apply: bool) -> tuple[dict, set]
 
 # ---------- 兼容入口（旧扁平用法，v1 语义保留） ----------
 
+# v1 词表兼容路径（生产流程不再调用；行为由 tests/test_apply_glossary.py 钉住）
 def load_glossary(path: Path) -> dict[str, str]:
     """加载词表为 {错法: 正确词(主词)}；内部走 v2 加载+扁平化，旧格式自动迁移。"""
     data = load_glossary_data(path)
@@ -390,6 +393,7 @@ def load_glossary(path: Path) -> dict[str, str]:
     return {info["wrong"]: info["right"] for info in official.values()}
 
 
+# v1 词表兼容路径（生产流程不再调用；行为由 tests/test_apply_glossary.py 钉住）
 def scan_text(text: str, glossary: dict[str, str],
               pat: re.Pattern) -> tuple[list[dict], str]:
     """兼容入口：扁平 {错法: 正确词} 扫描（无类别/候选语义）。"""
@@ -407,6 +411,7 @@ def scan_text(text: str, glossary: dict[str, str],
     return hits, new_text
 
 
+# v1 词表兼容路径（生产流程不再调用；行为由 tests/test_apply_glossary.py 钉住）
 def process_file(path: Path, glossary: dict[str, str], pat: re.Pattern,
                  apply: bool) -> dict:
     """兼容入口：扁平词表处理单个文件（.bak 备份 + 原子写）。"""

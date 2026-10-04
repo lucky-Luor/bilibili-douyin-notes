@@ -1,3 +1,5 @@
 # 开发/测试依赖（tests/ 全部离线可跑，无需 faster-whisper / av / gmssl）
 pytest
 qrcode  # 登录二维码 PNG 测试用
+numpy   # qc_check 测试合成噪声图用（test_bili_screenshot.py）
+pillow  # PIL：qc_check 合成图与 main 集成测试 mock 帧用（qrcode 生成 PNG 也依赖它）

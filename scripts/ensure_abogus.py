@@ -26,7 +26,8 @@
     标记 + 编译校验并打印醒目警告。
 
 手动安装（网络不通时的兜底方案）：
-    1. 浏览器打开下方 SOURCES 中的任一地址，另存为 abogus.py；
+    1. 打开下载地址（见本脚本 sources() 函数的返回值；自动下载失败时的
+       日志也会打印全部候选地址）中的任一个，另存为 abogus.py；
     2. 把文件放到 scripts/abogus.py（与本脚本同目录）；
     3. 重新运行即可，本脚本检测到文件有效后会跳过下载。
 """
@@ -62,9 +63,6 @@ def sources(commit: str) -> list[str]:
     base = f"https://raw.githubusercontent.com/{REPO}/{commit}/{UPSTREAM_PATH}"
     return [base, f"https://ghproxy.net/{base}"]
 
-
-# 兼容旧名字（只读展示用）；实际下载一律走 sources(effective_commit())
-SOURCES = sources(PINNED_COMMIT)
 
 TARGET = Path(__file__).resolve().parent / "abogus.py"
 

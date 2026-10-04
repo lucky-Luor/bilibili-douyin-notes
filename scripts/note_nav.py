@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""bilibili-douyin-notes 第五步：机械生成「参考时间戳」深链块（模型永不生成 URL）。
+"""bilibili-douyin-notes：为笔记时间导航区机械填充深链（模型永不生成 URL）。
+
+v3 = 视频时间索引条目原位填链；v1/v2 = 参考时间戳块生成（冻结路径）。
 
 用法:
     python scripts/note_nav.py <笔记.md> --meta <metadata.json> --txt-dir <转写txt目录>
 
-行为（规格 §1.1 / §3.5 / §6）:
-    - 锚点与文字来源：笔记内的标注行（听讲层，跳过代码块）+ 带 (mm:ss) 的
-      `##` 小节标题（章节起点）；元数据提供 platform / bvid / 分P 信息。
-    - B站深链（U1 语义）：对每个锚点 [mm:ss]，在逐分P的转写稿中找包含该
-      时间戳（±5s 容差）的分P，生成
-      https://www.bilibili.com/video/<bvid>?p=<N>&t=<该分P内相对秒>
-      （与 BiliNote 生产实现一致：t 是分P内相对秒而非全片累计秒，待人工实测
-      确认）；找不到归属分P的锚点跳过并 stderr warning。
-    - 抖音（metadata platform=douyin）：输出纯文本行，无链接。
-    - 幂等（v1/v2）：替换笔记中 <!-- NAV:BEGIN ... --> 与 <!-- NAV:END --> 之间
-      内容；标记缺失 → 追加到文件末尾；标记不配对 → 报错退出且不改文件。
-      写入用 .tmp → os.replace 原子替换。
-    - frontmatter note_type=short 时跳过（short 的参考时间戳可省，§1.1/§2.2）。
+行为:
     - v3 模式（frontmatter template_version=v3）：正文全面去时间戳，文末
       <details> 的「视频时间索引」由模型写好 NAV 标记对与无链接条目
-      `- [mm:ss] 标题`（模型永不生成 URL），本脚本只做机械填链：沿用 ±5s 容差
-      的分P归属，重写为
+      `- [mm:ss] 标题`（模型永不生成 URL），本脚本只做机械填链：沿用 ±5s
+      容差的分P归属，重写为
       `- [mm:ss](https://www.bilibili.com/video/<bvid>?p=N&t=<分P内相对秒>) 标题`。
       已带链接的条目跳过（幂等）；找不到归属分P → stderr warning 并跳过该行；
       platform=douyin 保持纯文本（属正常，不告警）；标记缺失或条目区为空 →
       stderr warning、不改文件、正常退出 0（存在性由门禁管）；标记不配对 →
       报错退出且不改文件。
+    - v1/v2 模式（老笔记兼容，冻结路径）：锚点与文字来源为笔记内的标注行
+      （听讲层，跳过代码块）+ 带 (mm:ss) 的 `##` 小节标题（章节起点）；元数据
+      提供 platform / bvid / 分P 信息。对每个锚点 [mm:ss]，在逐分P的转写稿中
+      找包含该时间戳（±5s 容差）的分P，生成
+      https://www.bilibili.com/video/<bvid>?p=<N>&t=<该分P内相对秒>；
+      找不到归属分P的锚点跳过并 stderr warning。
+      幂等：替换笔记中 <!-- NAV:BEGIN ... --> 与 <!-- NAV:END --> 之间内容；
+      标记缺失 → 追加到文件末尾；标记不配对 → 报错退出且不改文件。
+      写入用 .tmp → os.replace 原子替换。
+    - 两种模式同口径：B站深链 t 均为分P内相对秒而非全片累计秒（U1 语义，
+      见 locate_page）；抖音（metadata platform=douyin）输出纯文本行、无链接；
+      frontmatter note_type=short 时跳过（short 笔记的时间导航可省）。
 
 输出: stdout 一行 JSON 摘要（ensure_ascii=True）：
     {"status","mode","written","skipped","platform","note_type"}
@@ -48,9 +50,10 @@ TEMPLATE_VERSION_RE = re.compile(
 FENCE_RE = re.compile(r"^\s*```")
 TS_RE = re.compile(r"\[(\d{1,3}):(\d{2})\]")
 
-# 标注行识别常量：同时兼容 v1 ★ 符号 与 v2 三词文字标签（**加粗** / 全角括号）。
+# ── v1/v2 冻结路径（老笔记兼容；v3 不经过）──
+# 标注行识别常量：v1/v2 冻结路径专用：识别老笔记的 ★/三词标签标注行；
+# v3 笔记不走此机制（见 main_v3）。
 # 标签与要点句之间允许有或没有空格（全角括号形式常无空格）。
-# v2 切换为唯一语法时，只需修改本常量。
 NAV_LABELS = r"核心必考|重点掌握|了解即可"
 MARK_LINE_RE = re.compile(
     r"^\s*[-*]\s+(?:"
@@ -77,6 +80,8 @@ NAV_END_TEXT = "<!-- NAV:END -->"
 ANCHOR_TOLERANCE = 5  # 锚点归属分P的 ±5s 容差（与检查6 同口径）
 
 
+# ── v1/v2 冻结路径（老笔记兼容；v3 不经过）──
+# （其间 build_page_index / locate_page 为两条路径共用，v3 填链同样调用）
 def collect_entries(text: str) -> list[dict]:
     """从笔记收集带时间戳的导航条目（标注行 + 带时间的小节标题）。
 
@@ -132,7 +137,8 @@ def locate_page(page_index: dict[int, list[int]], sec: int):
     """返回 (页码, 该分P内相对秒)；找不到归属分P返回 None。
 
     各分P时间戳均从 0 起，同一秒可能命中多个分P——按页码升序取首个，
-    保证结果确定。
+    保证结果确定。v1/v2 与 v3 的深链 t 均取该分P内相对秒（U1 语义）。
+    U1 待真机实测：B站 `?p=&t=` 相对秒语义，实测前与 BiliNote 实现保持一致。
     """
     for page in sorted(page_index):
         for t in page_index[page]:
@@ -162,7 +168,7 @@ def render_lines(entries: list[dict], platform: str, bvid: str,
                   file=sys.stderr)
             skipped += 1
             continue
-        page, rel = loc  # U1: t 用该分P内相对秒（与 BiliNote 一致，待人工实测确认）
+        page, rel = loc
         url = f"https://www.bilibili.com/video/{bvid}?p={page}&t={int(round(rel))}"
         lines.append(f"- [{ts}]({url}) {text}")
     return lines, skipped
@@ -254,7 +260,7 @@ def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
                   file=sys.stderr)
             skipped += 1
             continue
-        page, rel = loc  # U1: t 用该分P内相对秒（与 v1/v2、BiliNote 一致）
+        page, rel = loc
         url = f"https://www.bilibili.com/video/{bvid}?p={page}&t={int(round(rel))}"
         out[begins[0] + 1 + offset] = (
             f"{m.group('indent')}- [{ts_text}]({url}) {title}")
@@ -271,7 +277,9 @@ def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    ap = argparse.ArgumentParser(description="生成/刷新笔记的「参考时间戳」NAV 深链块")
+    ap = argparse.ArgumentParser(
+        description="为笔记时间导航区机械填充深链：v3 填「视频时间索引」条目，"
+                    "v1/v2 生成「参考时间戳」NAV 块（模型永不生成 URL）")
     ap.add_argument("note", help="笔记 .md 路径")
     ap.add_argument("--meta", required=True, help="metadata.json 路径")
     ap.add_argument("--txt-dir", required=True, help="转写稿 .txt 所在目录")
@@ -290,7 +298,7 @@ def main(argv=None) -> int:
         note_type = (nt.group(1) if nt else "").strip().lower()
         tv = TEMPLATE_VERSION_RE.search(fm.group(1))
         template_version = (tv.group(1) if tv else "").strip().lower()
-    if note_type == "short":  # §1.1/§2.2：short 的参考时间戳可省，直接跳过
+    if note_type == "short":  # short 笔记的时间导航可省，直接跳过
         print(json.dumps({"status": "skipped", "reason": "note_type=short",
                           "written": 0, "skipped": 0}, ensure_ascii=True))
         return 0

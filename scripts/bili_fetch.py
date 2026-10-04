@@ -19,9 +19,13 @@
                   *.ai字幕存疑.txt 备查，本分P按无字幕处理直接走 ASR 兜底
     api_empty     任一接口出现了字幕轨但全无可用 URL（/x/player/v2 对部分视频
                   只给元信息不给 URL 的已知问题，已自动尝试 wbi/v2 兜底）
-                  → 提示用户填 SESSDATA 后重跑，仍失败再走 ASR
-    none          所有字幕接口都完全没有字幕轨 → 确实无字幕，直接走 ASR，
-                  不必提示 SESSDATA
+                  → 主动询问扫码登录（--login，生成二维码 PNG 图片）后重跑；
+                  拒绝/仍失败可手填 SESSDATA 兜底，或直接走 ASR
+    none          所有字幕接口都完全没有字幕轨 → 确实无字幕，直接走 ASR；
+                  未登录时脚本会输出 hint_optional（可 --login 扫码重跑，
+                  把它转述给用户即可）
+    error         本分P抓取过程抛异常（网络/接口问题，摘要 error 字段带详情），
+                  不阻塞其他分P；无字幕文本产出，后续同样由 ASR 兜底
 """
 import json
 import os
@@ -217,9 +221,9 @@ def fmt_ts(sec) -> str:
 
 
 def note_type_for(duration_sec, page_count) -> str:
-    """建议笔记型别（规格 §4.4 坑③）：short 当且仅当 总时长 ≤600s 且 分P数 == 1，
-    否则 lecture。分P数只做 tiebreak，不作主判据。脚本只给建议，
-    Agent 可在笔记 frontmatter 的 note_type 覆盖，门禁只读 frontmatter。"""
+    """建议笔记型别（判据见 references/note-template.md）：short 当且仅当
+    总时长 ≤600s 且 分P数 == 1，否则 lecture。分P数只做 tiebreak，不作主判据。
+    脚本只给建议，Agent 可在笔记 frontmatter 的 note_type 覆盖，门禁只读 frontmatter。"""
     return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"
 
 

@@ -1,4 +1,7 @@
 {
-  "_说明": "复制本文件为 config.json 并按需填写；config.json 已被 .gitignore 排除，不会入库",
-  "SESSDATA": ""
+  "_说明": "复制本文件为 config.json 并按需填写；config.json 已被 .gitignore 排除，不会入库。asr_model / asr_device / asr_cpu_threads 三个键均可选，留空或缺省即走脚本默认（本文件保持默认行为）：asr_model=转写模型 tiny/base/small/medium/large-v3，默认 small（高阶模型加载失败自动逐级降级到 small）；asr_device=推理设备 auto/cpu/cuda，默认 auto（检测到 NVIDIA GPU 用 cuda+float16，否则 cpu+int8，cuda 加载失败自动回退 cpu）；asr_cpu_threads=CPU 推理线程数，默认取 min(CPU 核数, 8)，填正整数可覆盖",
+  "SESSDATA": "",
+  "asr_model": "",
+  "asr_device": "",
+  "asr_cpu_threads": ""
 }
