@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import bili_fetch  # noqa: E402
 import bili_transcribe  # noqa: E402
@@ -84,6 +86,7 @@ def test_transcribe_backend_gate_unchanged(tmp_path):
 
 def test_render_qr_png_primary(tmp_path, monkeypatch):
     """主路径：PNG 写到当前工作目录，返回路径字符串（Agent 直接把路径给用户）。"""
+    pytest.importorskip("qrcode", reason="CI 轻量依赖无 qrcode，本地开发环境真实跑")
     monkeypatch.chdir(tmp_path)
     out = bili_fetch._render_qr("https://bilibili.com/login?qr=test")
     assert out is not None
@@ -93,6 +96,7 @@ def test_render_qr_png_primary(tmp_path, monkeypatch):
 
 def test_render_qr_falls_back_to_ascii_when_png_fails(tmp_path, monkeypatch):
     """cwd 与临时目录都写不进 PNG 时退回终端 ASCII，不直接失败。"""
+    pytest.importorskip("qrcode", reason="CI 轻量依赖无 qrcode，本地开发环境真实跑")
     monkeypatch.chdir(tmp_path)
     import qrcode
 

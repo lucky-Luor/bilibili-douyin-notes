@@ -1,2 +1,3 @@
 # 开发/测试依赖（tests/ 全部离线可跑，无需 faster-whisper / av / gmssl）
 pytest
+qrcode  # 登录二维码 PNG 测试用
