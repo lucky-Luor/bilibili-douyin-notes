@@ -17,7 +17,7 @@ description: 把B站/抖音视频整理成Markdown课堂笔记。用户发来 bi
 
 ## 工具位置
 
-- 脚本目录：本 skill 安装目录下的 `scripts/`（下文命令中的绝对路径请替换为你的实际安装路径）
+- 脚本目录：本 skill 安装目录下的 `scripts/`（命令中的 `<skill安装目录>` 占位符请替换为本 skill 实际安装路径）
 - 配置文件：本 skill 安装目录下的 `config.json`（存放 SESSDATA）
 - 参考资产：
   - `references/note-template.md` —— 课堂笔记模板 v3（骨架、要点表达、语法契约、时间戳规范）
@@ -40,7 +40,7 @@ python "<skill安装目录>/scripts/douyin_fetch.py" "<链接或口令>" "<工�
 ```
 
 - 两个脚本都自动生成 `<输出目录>/metadata.json`，stdout 最后一行是 JSON 摘要。
-- **B站**：每个分P的字幕 `.txt`（带 `[mm:ss]` 时间戳），按摘要里每个分P的 **`subtitle_detail` 字段五态分流**：
+- **B站**：每个分P的字幕 `.txt`（带 `[mm:ss]` 时间戳），按摘要里每个分P的 **`subtitle_detail` 字段六值分流（cc / ai / ai_mismatch / none / api_empty / error，其中 cc 与 ai 处置相同）**：
   - `cc` / `ai` → 已拿到官方/AI字幕，直接进入第三步生成笔记（AI 字幕已由脚本自动做"内容↔标题 ASCII 词"交叉校验，错位时会判为 `ai_mismatch` 而不是 `ai`）；
   - `ai_mismatch` → AI 字幕整体错位（返回了 ai 状态但内容是别的音频，实测有配成无关电影对白的案例）：**不可信，直接进入第二步 ASR 兜底**，不要用该字幕生成笔记；存疑字幕已另存 `*.ai字幕存疑.txt` 备查，摘要带 `hint_mismatch` 时可向用户提一句；
   - `none` → 该分P确实没有字幕，直接进入第二步 ASR，不用再折腾；**但若摘要带 `hint_optional`（未配置登录态时可能出现），转述给用户**：「若该视频本应有 AI 字幕，可扫码登录（`--login`）后重跑，通常能跳过语音识别」——由用户判断要不要扫，不强制；
@@ -63,7 +63,7 @@ python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-not
 注意事项：
 - **设备与降级链**：自动检测 CUDA（有 NVIDIA GPU 用 float16，否则 CPU int8 + 批量推理）；cuda 加载失败自动回退 cpu，批量推理不可用自动回退逐段，高阶模型（medium/large）加载失败自动降一档直到 small——**每次落级都打印原因（stderr 警告 + JSON `fallback_reasons`），不静默**。检测异常时可用 `--device cpu` / `--device cuda` 强制指定；`--model` 未指定时读 config.json 的 `asr_model`（再默认 small），`asr_cpu_threads` 可调 CPU 线程数。
 - **术语偏好注入**：脚本自动读词表（仓库层 + 用户层），把高频术语的正确词注入 ASR 的 initial_prompt——转写时就写对，比事后纠错更准。
-- **耗时**：CPU int8 下 small 模型约 1~3 倍速实时（批量推理开启后更快），长视频（>1小时）耗时明显，转写前告知用户预计时间；长视频或对质量不满意时用 `--model medium` 重转（**先删对应的 txt**，否则脚本会跳过）。
+- **耗时**：CPU int8 下 small 模型约为视频时长的 1~3 倍（批量推理可缓解；有 NVIDIA GPU 时快于实时），长视频（>1小时）耗时明显，转写前告知用户预计时间；长视频或对质量不满意时用 `--model medium` 重转（**先删对应的 txt**，否则脚本会跳过）。
 - 首次运行会下载模型（small≈480MB，自动走 hf-mirror.com 镜像）。
 - ASR 文稿没有标点分段质量保证，技术术语常被转错——生成笔记前用 `references/asr-glossary.json` 词表对照校正（见第三步第2条）。
 
@@ -96,15 +96,15 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 1. 读取 metadata.json（分P结构、时长）+ 各分P转写/字幕文本。
 2. **ASR 术语校正（工具化，不是凭感觉）**：先跑
    `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，按类别分组只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份，命中词条 hits 自动累加）。词表分两层：仓库层 `references/asr-glossary.json`（编程/美食/游戏/通用大类）+ 用户层（输出目录 `glossary.user.json` 或 `~/.zcode/bdn-glossary.user.json`，同键用户层优先）；候选词命中只报告（标 `[候选]`）永不替换。**维护闭环**：发现词表未覆盖的新错法 → `--add "错法=正确词" --category 编程`（或 `--candidate` 先入候选、`--promote "错法"` 转正）；`--list` 查看全部；`--categories`/`--topic` 控制启用范围。注意：转写阶段已自动把高频术语注入 initial_prompt（见第二步），词表越丰富转写越准。
-3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节。禁止跳过分块直接全文阅读长转写稿。
+3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节（该去重仅作用于分块合并的中间产物；正文按 v3 规则仍然禁时刻）。禁止跳过分块直接全文阅读长转写稿。
 4. 按 `references/note-template.md`（**v3 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。生成前必读该模板文件。v3 硬性要求：
    - **frontmatter**（`---` 包围）写全（字段与 v2 一致）：`template_version: v3`、`note_type`（取 metadata.json 顶层 `suggested_note_type`，技术密度高的短片可覆盖为 lecture）、`platform`、`bvid`（抖音填 `video_id`）、`source`、`created`、`duration`（带引号的 `"mm:ss"`）；
    - **标题区**：`# 课堂笔记 <序号>：<主题>`，引语块先 `> 核心主线：`（一句话串起全片知识主线）再 `> 课程来源：`，有代码仓库再加 `> 课程代码：`；目录条目 `- [N. 小节名](#锚点)` 不带时刻，末尾固定列出 本讲知识地图 / 概念卡片 / 自测题（复习用）/ 视频时间索引；
    - **小节**：`## N. 小节名`（禁时刻后缀），以 `**核心思想：** <一句话>` 开头，每小节 ≥3 行实质内容；要点用普通列表 `- 要点句`、关键术语 `**加粗**`，**禁止三词标签前缀（核心必考/重点掌握/了解即可及任何变体）、禁止行内 `[mm:ss]`**；对比性内容优先用表格；
    - **代码块**：真实语言 fence；来源标注可选——来自克隆仓库写 `# 来源：仓库 <子项目>/<文件路径>`（注释符随语言），按视频讲解组织的可写 `# 按视频讲解还原` 或不写；任何代码块内禁时刻；
-   - **概念卡片**：`### 概念名`（禁标签后缀）+ 定义/出现/依赖/易混 四行；`出现` 写 ≥2 个小节序号（如 `出现：2、5`），禁时刻；
+   - **概念卡片**：`### 概念名`（禁标签后缀）+ 定义/出现/依赖/易混 四行；`出现` 写 ≥2 个小节序号（如 `出现：2、5`，不足 2 个小节为 warning），禁时刻；
    - **自测题折叠答案**：每题末尾 `（对应：概念名）`（概念必须在概念卡片集合内：lecture 必须、short 可选），紧跟 `<details><summary>答案</summary>` 折叠块，答案以 `**答案：**` 开头、至多一行、禁时刻；lecture 4~7 道（short 2~3 道）；选题主打高频原理与面试易错点，禁 yes/no 题干；
-   - **mermaid 知识地图**：` ```mermaid mindmap `，节点标签禁半角括号与引号、≤12 字（括号用全角）；
+   - **mermaid 知识地图**：` ```mermaid mindmap `（或 graph/flowchart），节点标签禁半角 ( ) [ ] { } 与引号、≤12 字（需要括号用全角）；标签卫生由门禁 warning 级校验；
    - **视频时间索引**：文末最后一节，`<details>` 折叠包裹 NAV 标记对；模型只写条目 `- [mm:ss] <与正文一级小节同名>`（一级章节一条，不做逐要点条目），**不写 URL**；时刻必须取自转写稿真实时间行（允许 ±5s 内小幅前移，禁止虚构）；lecture 必须有本节，short 可整体省略（省略时 NAV 标记也不留）。
 5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
 6. **填充时间索引深链（v3 笔记默认执行）**：
@@ -119,157 +119,30 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 
 ## 笔记模板
 
-模板全文（完整骨架 + 要点表达 + 语法契约 + 时间戳规范 + short 差异表 + 要点清单）见 **`references/note-template.md`**（**v3**），生成笔记前必读。骨架速览：
+**完整骨架与语法契约以 `references/note-template.md` 为准（生成前必读）**——全文含
+lecture 完整骨架、时间戳规范、语法契约、short 差异表、截图嵌入规范、生成流程。
+结构层次速览（节点内容以 `<…>` 占位）：
 
-````markdown
+```markdown
+---                  # frontmatter：template_version: v3 / note_type / platform / bvid / source / created / duration
+# 课堂笔记 <序号>：<主题>
+> 核心主线：<一句话知识主线> ／ > 课程来源：<视频标题等>（有仓库再加 > 课程代码：<仓库地址>）
+## 目录              # - [N. 小节名](#锚点) 不带时刻；末尾固定列出 本讲知识地图 / 概念卡片 / 自测题（复习用）/ 视频时间索引
+## N. 小节名 ×N      # **核心思想：** <一句话> + 要点列表（术语加粗）+ 代码块 / 对比表格 + 截图
+## 本讲知识地图      # mermaid mindmap 代码块
+## 概念卡片          # ### <概念名>：定义 / 出现 / 依赖 / 易混
+## 自测题（复习用）  # <details> 折叠答案，lecture 4~7 道 / short 2~3 道
 ---
-template_version: v3
-note_type: lecture
-platform: bilibili            # bilibili | douyin
-bvid: BV1xxxxxxxxx            # 抖音则为 video_id
-source: https://www.bilibili.com/video/BV1xxxxxxxxx
-created: 2026-10-03
-duration: "42:10"
----
-
-# 课堂笔记 03：Spring 容器与 Bean 生命周期
-
-> 核心主线：从“为什么需要容器”出发，沿控制反转 → 依赖注入 → BeanFactory → ApplicationContext 的脉络，理解 Spring 如何接管对象的一生。
-> 课程来源：<视频标题>（B站 BV1xxxxxxxxx，UP主：<名字>，共 17 个小节约 42 分钟）
-> 课程代码：<简介中的仓库地址，如有>
-
-## 目录
-
-- [1. Spring 三大特性](#1-spring-三大特性)
-- [2. BeanFactory 与 ApplicationContext](#2-beanfactory-与-applicationcontext)
-- [本讲知识地图](#本讲知识地图)
-- [概念卡片](#概念卡片)
-- [自测题（复习用）](#自测题复习用)
-- [视频时间索引](#视频时间索引)
-
----
-
-## 1. Spring 三大特性
-
-**核心思想：** 控制反转与依赖注入是同一件事的两种说法。
-
-- **控制反转**把对象的创建权交给容器，**依赖注入**是它的实现手段
-- 对象不再自己 `new` 依赖，而是由容器在装配阶段注入，耦合从编译期移到配置期
-- 三大特性中真正改变编码习惯的是控制反转，其余特性服务于它的落地
-
-```java
-// 来源：仓库 spring-demo/src/main/java/demo/OrderService.java
-@Service
-public class OrderService {
-    private final PaymentGateway gateway;
-
-    public OrderService(PaymentGateway gateway) {  // 构造器注入
-        this.gateway = gateway;
-    }
-}
-```
-
-![Spring 三大特性](images/p01_three-features.png)
-
----
-
-## 2. BeanFactory 与 ApplicationContext
-
-**核心思想：** 两者是同一继承体系的不同完成度。
-
-- 两者都实现 **BeanFactory** 接口，**ApplicationContext** 是它的超集
-- BeanFactory 惰性实例化，ApplicationContext 默认**预实例化全部单例**
-- 需要启动即失败（fail-fast）的场景选 ApplicationContext，配置错误在启动阶段暴露
-
-| 对比项 | BeanFactory | ApplicationContext |
-|---|---|---|
-| 实例化时机 | 惰性（首次 getBean 时） | 启动时预实例化单例 |
-| 定位 | 基础容器 | 完整容器（事件、国际化、AOP 集成） |
-
----
-
-## 本讲知识地图
-
-```mermaid
-mindmap
-  root((Spring 容器))
-    三大特性
-      控制反转
-      依赖注入
-    容器实现
-      BeanFactory
-      ApplicationContext
-```
-
-## 概念卡片
-
-### 控制反转
-
-- 定义：把对象创建与依赖装配的控制权从代码转移到容器
-- 出现：1、2
-- 依赖：
-- 易混：依赖注入——前者是设计原则，后者是落地手段
-
-### ApplicationContext
-
-- 定义：BeanFactory 的完整实现，启动即预实例化全部单例
-- 出现：1、2
-- 依赖：BeanFactory
-- 易混：BeanFactory——预实例化 vs 惰性加载
-
-## 自测题（复习用）
-
-1. 在需要启动即失败（fail-fast）的场景下，为什么选 ApplicationContext 而不是 BeanFactory？（对应：ApplicationContext）
-<details><summary>答案</summary>
-
-**答案：** ApplicationContext 在启动时预实例化全部单例，配置错误会在启动阶段暴露；BeanFactory 惰性加载，错误推迟到首次获取时。
-
-</details>
-
-2. 解释控制反转与依赖注入的关系，并说明为什么说它们是同一件事的两种说法。（对应：控制反转）
-<details><summary>答案</summary>
-
-**答案：** 控制反转是设计原则（把控制权交给容器），依赖注入是它的实现手段（构造器/字段/Setter 注入）。
-
-</details>
-
-3. …（lecture 共 4~7 道）
-
----
-
-<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->
-## 视频时间索引
-
-<details>
-<summary>📺 需要回看原片时展开</summary>
-
-- [00:00] 1. Spring 三大特性
-- [08:12] 2. BeanFactory 与 ApplicationContext
-
-</details>
-
+<!-- NAV:BEGIN 条目由模型写出，深链由 scripts/note_nav.py 填充 -->
+## 视频时间索引      # <details> 折叠；条目 - [mm:ss] <章节名>，不写 URL
 <!-- NAV:END -->
-````
-
-模板要点（要点表达、语法契约、时间戳规范、short 型差异的完整定义以 `references/note-template.md` 为准）：
-
-- 正文按技术知识体系组织、阅读连贯：小节 `## N. 小节名`（禁时刻后缀），每节以
-  `**核心思想：**` 一句话开头、≥3 行实质内容；要点用普通列表 `- 要点句`（关键术语
-  加粗，禁三词标签前缀、禁行内 `[mm:ss]`），对比性内容优先用表格；
-- **全文时刻只出现在文末“视频时间索引”**（lecture 必有，`<details>` 折叠）：条目
-  `- [mm:ss] <与正文一级小节同名>`，时刻取自转写稿真实时间行（±5s 容差、禁止虚构），
-  模型不写 URL，深链由 `note_nav.py` 填充；
-- 概念卡片（`### 概念名` 无标签后缀，`出现` 只写小节序号）、自测题（折叠答案，
-  lecture 4~7 道 / short 2~3 道，`（对应：…）` 必须在概念卡片集合内）、mermaid
-  知识地图按第五节语法契约写；
-- 代码块用课程真实代码，来源标注可选（`# 来源：仓库 <子项目>/<文件路径>` 或
-  `# 按视频讲解还原`），任何代码块内禁时刻。
+```
 
 ## 常见问题
 
 | 现象 | 处理 |
 |---|---|
-| 分P `subtitle_detail` 为 `api_empty` | 先提示用户填写 config.json 的 SESSDATA（浏览器F12 → Application → Cookies → bilibili.com → SESSDATA）后重跑一次 fetch；仍 `api_empty` 才直接走ASR |
+| 分P `subtitle_detail` 为 `api_empty` | 主动询问用户「要现在扫码登录B站吗？」，确认后代跑 `bili_fetch.py --login`（生成二维码 PNG 图片并打印路径）后重跑；用户拒绝或重跑后仍 `api_empty` 才走 ASR |
 | 分P `subtitle_detail` 为 `ai_mismatch` | AI 字幕整体错位（内容是别的音频，看着通顺但与视频无关），fetch 已自动判出并按无字幕处理；直接走 ASR，不要试图沿用存疑字幕 |
 | playurl 下载失败/音频为空 | 可能是风控，重试一次；仍失败则改用 `yt-dlp` 下载音频后手动喂给 transcribe 的 transcribe 函数思路 |
 | faster-whisper 首次运行卡在下载 | 检查 HF_ENDPOINT 是否为 https://hf-mirror.com，或手动 `pip install -U huggingface_hub` |

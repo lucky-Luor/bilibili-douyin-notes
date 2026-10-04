@@ -9,9 +9,9 @@
 > **新笔记一律按本文件（v3）生成**：正文按技术知识体系组织、阅读连贯，
 > 正文零时间戳、零考试向标签，视频时间戳只存在于文末折叠的“视频时间索引”。
 
-本文件是本 skill 生成课堂笔记的**唯一模板与规范**，包含：完整 Markdown 骨架
-（lecture / short 两型）、时间戳规范、语法契约（要点表达 / 概念卡片 / 自测题 /
-知识地图 / 视频时间索引）、short 差异表、截图嵌入规范、生成流程、模板要点清单。
+本文件是本 skill 生成课堂笔记的**唯一模板与规范**，包含：lecture 完整骨架 +
+short 差异表、时间戳规范、语法契约（要点表达 / 概念卡片 / 自测题 /
+知识地图 / 视频时间索引）、截图嵌入规范、生成流程、模板要点清单。
 不依赖任何个人本机文件，任何人在任何机器上按本文件生成都应得到结构一致的笔记。
 
 **定位（2026-10-04，v3）**：笔记是“看完课替代手写笔记”的**课后复习资料**——
@@ -214,7 +214,7 @@ mindmap
 
 ---
 
-<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->
+<!-- NAV:BEGIN 条目由模型写出，深链由 scripts/note_nav.py 填充 -->
 ## 视频时间索引
 
 <details>
@@ -270,7 +270,7 @@ mindmap
 
 - fence 语言必须是 `mermaid`，首个非空行匹配 `mindmap`（或 `graph` / `flowchart`）；
   `mindmap` 时至少 2 级缩进；
-- **节点标签卫生**：单个标签 ≤ 12 字；标签内禁止 `(` `)` `[` `]` `{` `}` `"`；
+- **节点标签卫生**（v3 门禁 warning 级校验）：单个标签 ≤ 12 字；标签内禁止 `(` `)` `[` `]` `{` `}` `"`；
   需要括号时用全角（）。
 
 ### 5.3 自测题
@@ -297,7 +297,7 @@ mindmap
 ```markdown
 ---
 
-<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->
+<!-- NAV:BEGIN 条目由模型写出，深链由 scripts/note_nav.py 填充 -->
 ## 视频时间索引
 
 <details>
@@ -316,7 +316,7 @@ mindmap
   `NAV:BEGIN` 与 `NAV:END` 标记对之内**（门禁 V3-E2 按此校验布局，
   与 v2 的"参考时间戳"布局一致）；
 - **模型只写条目** `- [mm:ss] <与正文一级小节同名>`：一级章节（`## N. 小节名`）
-  粒度一条，不做逐要点条目；条目标题与对应小节标题完全一致（含序号）；
+  粒度一条，不做逐要点条目；条目标题与对应小节标题一致（序号可省略；门禁按去序号后的文本比对，不一致为 warning）；
 - 时刻规则见第三节（转写稿真实时间行，±5s 容差，禁止虚构）；
 - **模型不写 URL**：深链由 `scripts/note_nav.py` 填充为 `- [mm:ss](URL) 标题`
   （B站生成 `?p=N&t=S` 深链；抖音无深链，脚本保持纯文本）；
@@ -332,7 +332,7 @@ mindmap
 
 | 项 | lecture | short |
 |---|---|---|
-| 概念卡片 | 必须（≥2 张） | 不要求，出现则 ≤3 张 |
+| 概念卡片 | 必须（≥2 张） | 不要求，出现则 ≤3 张（v3 门禁不强制数量，仅校验定义/出现非空等） |
 | 本讲知识地图 | 必须（mermaid） | **可省** |
 | 自测题 | 4~7 道，每题必须带 `（对应：…）` | 2~3 道，`（对应：…）` 可选 |
 | 视频时间索引 | **必须有**（文末折叠，note_nav 填深链） | 可整体省略（省略时 NAV 标记也不留；note_nav 跳过 short） |
@@ -349,56 +349,49 @@ mindmap
 
 ## 八、生成流程（谁在什么时候调用什么）
 
+> 完整步骤与参数以 SKILL.md 第三步为准，本节为速览。
+
 ```
 1. bili_fetch.py <URL> <outdir>            → metadata.json（含 suggested_note_type）+ 字幕 txt
-   └ 若 api_empty 且无 SESSDATA → 提示填 SESSDATA 后重跑；仍失败走 2
+   └ api_empty → 询问扫码登录（`--login`，二维码 PNG）重跑；拒绝或仍失败走 2
    （抖音：douyin_fetch.py <链接或口令> <outdir> → metadata.json + media_p01.mp4）
 2. bili_transcribe.py <metadata.json>      → 缺字幕分P的 txt（抖音必走本步 ASR）
-3. bili_screenshot.py <meta> <txt> <img>   → images/*.png + images/manifest.json（含 keyword）
-4. Agent 读 SKILL.md + 本模板，按第四节骨架写出笔记
+3. apply_glossary.py <转写稿.txt>          → ASR 术语校正（先 dry-run 报告，确认后 --apply 落盘）
+4. transcript_chunk.py <转写稿.txt>        → （单分P超约 2 万字时）分块 map-reduce，写死流程禁止跳过
+5. bili_screenshot.py <meta> <txt> <img>   → （可选）images/*.png + images/manifest.json（含 keyword）
+6. Agent 读 SKILL.md + 本模板，按第四节骨架写出笔记
    ├ 要点行、概念卡片、mermaid、自测题、时间索引条目 ← Agent 直接写出（条目不含 URL）
-   └ NAV 标记对随骨架写出，标记内部内容交给第 5 步脚本填充
-5. python scripts/note_nav.py <笔记.md> --meta <metadata.json> --txt-dir <txt目录>
+   └ NAV 标记对随骨架写出，标记内部内容交给第 7 步脚本填充
+7. python scripts/note_nav.py <笔记.md> --meta <metadata.json> --txt-dir <txt目录>
                                           → 幂等填充 NAV 区块深链（模型永不生成 URL）
    └ v3 笔记默认执行；note_type=short → 跳过；NAV 标记缺失 → warning 跳过
-6. python scripts/validate_note.py <笔记.md> --meta <metadata.json> --txt-dir <txt目录>
+8. python scripts/validate_note.py <笔记.md> --meta <metadata.json> --txt-dir <txt目录>
                                           → errors 必须为 0 才交付
+9. clean_media.py <输出目录>               → 交付后询问用户是否清理缓存媒体（默认列清单，--apply 实删）
 ```
 
-**关键分工**：第 4 步的模型输出**不含任何 URL**（时间索引条目为纯文本
-`- [mm:ss] 标题`）；第 5 步的脚本输出**不含任何自由文本**（把条目补成
+**关键分工**：第 6 步的模型输出**不含任何 URL**（时间索引条目为纯文本
+`- [mm:ss] 标题`）；第 7 步的脚本输出**不含任何自由文本**（把条目补成
 `- [mm:ss](URL) 标题`）。两者在文件内通过 `NAV:BEGIN/END` 标记拼接，职责不重叠。
 
-## 九、模板要点清单（生成笔记时逐条核对）
+## 九、模板要点清单（条目 → 详见节号）
 
-- [ ] 文件开头有 frontmatter（`---` 包围），且含 `template_version: v3`、`note_type`、
-      `platform`、`bvid`（或 `video_id`）、`source`、`created`、`duration` 全部字段；
-- [ ] `# 课堂笔记 <序号>：<主题>` + 引语块 `> 核心主线：…` / `> 课程来源：…`
-      （有代码仓库再加 `> 课程代码：…`）；
-- [ ] 目录条目 `- [N. 小节名](#锚点)` 不带时刻，末尾固定列出 本讲知识地图 /
-      概念卡片 / 自测题（复习用）/ 视频时间索引；
-- [ ] 小节标题 `## N. 小节名` 不带时刻后缀；每节以 `**核心思想：**` 一句话开头，
-      除 `目录`/`视频时间索引` 外每节 ≥3 行实质内容；
-- [ ] 要点用普通列表 `- 要点句`，关键术语 `**加粗**`；无三词标签前缀（残留 error）、
-      无行内 `[mm:ss]`；对比性内容优先用表格；
-- [ ] 代码块用课程真实代码 + 真实语言 fence；来源标注可选（`# 来源：仓库 <子项目>/<文件路径>`
-      或 `# 按视频讲解还原`），任何代码块内禁时刻；
-- [ ] 全文时刻只出现在文末“视频时间索引”（frontmatter `duration` 除外）；索引条目
-      `- [mm:ss] <与正文一级小节同名>`，时刻来自转写稿真实时间行（±5s 容差，
-      禁止虚构），lecture 必须有本节；
-- [ ] 概念卡片：`### 概念名`（无标签后缀）+ 定义/出现（≥2 小节序号、禁时刻）/
-      依赖/易混；
-- [ ] 自测题：lecture 4~7 道（short 2~3 道），每题 `（对应：概念名）`（概念必须存在
-      于概念卡片集合）+ `<details>` 折叠 + `**答案：**` 开头、至多一行、禁时刻；
-      禁 yes/no 题干；
-- [ ] 知识地图用 ` ```mermaid mindmap `；节点标签禁半角括号与引号，≤12 字
-      （需要括号用全角）；
-- [ ] 截图嵌在相关要点/所属小节附近；caption 以锚点关键词开头、不含时刻；截图文件名
-      默认可中文，需要 ASCII 时给 `bili_screenshot.py` 加 `--ascii-names`；
-- [ ] 生成后先跑 `python scripts/note_nav.py <笔记.md> --meta <metadata.json>
-      --txt-dir <转写稿目录>`（v3 默认执行，short 跳过），再运行
-      `python scripts/validate_note.py <笔记.md> --meta <metadata.json>
-      --txt-dir <转写稿目录>`，errors 为 0 才交付。
+| 条目 | 详见 |
+|---|---|
+| frontmatter 字段 | 一 |
+| 要点表达（标签/时刻禁令、术语加粗） | 二 |
+| 时间戳禁令（正文零时刻） | 三 |
+| 代码块来源标注（可选） | 三 |
+| 时刻防虚构规则（±5s 容差） | 三 |
+| 标题区与引语块 | 四 |
+| 目录条目 | 四 |
+| 小节结构与核心思想 | 四 |
+| 概念卡片 | 5.1 |
+| 知识地图（mermaid） | 5.2 |
+| 自测题 | 5.3 |
+| 视频时间索引 | 5.4 |
+| 截图嵌入 | 七 |
+| 生成流程（note_nav / validate / clean_media） | 八 |
 
 ---
 

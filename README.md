@@ -4,7 +4,7 @@
 
 **把 B站 / 抖音视频一键整理成 Markdown 课堂笔记的 AI Agent Skill**
 
-字幕抓取 · 本地语音识别 · 重点截图 · 笔记模板 —— 全流程免费，无需登录
+字幕抓取 · 本地语音识别 · 重点截图 · 笔记模板 —— 免登录可用，扫码登录解锁 AI 字幕与更高画质
 
 [![CI](https://github.com/lucky-Luor/bilibili-douyin-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/lucky-Luor/bilibili-douyin-notes/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -18,12 +18,12 @@
 
 ## ✨ 功能特性
 
-- **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）与抖音（`douyin.com` / `v.douyin.com` 短链 / 分享口令文本）
+- **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）与抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）
 - **字幕优先**：自动抓取B站官方/AI字幕（可选登录），零成本秒出文稿
 - **ASR 兜底**：无字幕时用 faster-whisper 本地语音识别（CPU int8，国内走 hf-mirror 镜像），**不调任何付费 API**
 - **重点截图**：按转写稿时间戳锚点 + PyAV 抽帧，本地画质初筛自动**校验并标记**黑屏/空屏/模糊帧（像素占比法，白底 PPT 不误判），最终由 Agent 视觉复核决定取舍；无硬编码锚点时自动从文稿提取关键词
 - **抖音免登录**：游客身份（ttwid + a_bogus 签名）直接下载无水印视频，无需账号 Cookie
-- **课堂笔记模板**：小节结构 + 关键术语加粗 + 真实代码引用 + 知识地图 + 自测题，文末附可回看跳转的视频时间索引
+- **课堂笔记模板**：小节结构 + 关键术语加粗 + 真实代码引用 + 知识地图 + 概念卡片 + 自测题，文末附可回看跳转的视频时间索引
 
 ## 🧩 工作流程
 
@@ -50,7 +50,7 @@
         ▼
 ┌─────────────────────┐
 │ 第三步：AI 按模板     │  课堂笔记 .md
-│ 生成课堂笔记         │  （小节+要点加粗+代码+知识地图+自测题）
+│ 生成课堂笔记         │  （小节+要点加粗+代码+知识地图+概念卡片+自测题）
 └─────────────────────┘
 ```
 
@@ -72,17 +72,16 @@ git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.zcode/skill
 # 2. 安装 Python 依赖（按需：B站流程 / 抖音流程见 requirements.txt 内注释）
 pip install -r requirements.txt
 
-# （可选）只装测试依赖：tests/ 离线可跑，无需上面任何重依赖
+# （可选）只装测试依赖：tests/ 离线可跑，无需 faster-whisper / av / gmssl（numpy / pillow 仍需安装）
 pip install -r requirements-dev.txt
 
 # 3. （可选）扫码登录B站，自动获取 AI 字幕
-python scripts/bili_fetch.py --login   # 终端出二维码，B站App扫码即登录，SESSDATA 自动写入 config.json
+python scripts/bili_fetch.py --login   # 生成二维码 PNG 图片并打印路径，B站 App 扫码即登录，SESSDATA 自动写入 config.json
                                        # 无 B站App：cp config.example.json config.json 后按文件内注释手动填写
 ```
 
-> **路径说明**：`SKILL.md` 中示例命令使用了作者本机的绝对路径，安装后请把其中的
-> `C:/Users/<你的用户名>/.zcode/skills/bilibili-douyin-notes/` 替换为你的实际安装路径
-> （脚本内部均基于 `__file__` 相对定位，改路径不影响运行）。
+> **路径说明**：`SKILL.md` 中示例命令的 `<skill安装目录>` 为占位符，使用时请替换为
+> 本 skill 的实际安装路径（脚本内部均基于 `__file__` 相对定位，改路径不影响运行）。
 
 <details>
 <summary>最小依赖说明</summary>
@@ -106,7 +105,7 @@ python scripts/bili_fetch.py --login   # 终端出二维码，B站App扫码即�
 }
 ```
 
-获取方式（推荐）：`python scripts/bili_fetch.py --login`，用 B站 App 扫描终端二维码即登录，
+获取方式（推荐）：`python scripts/bili_fetch.py --login`，生成二维码 PNG 图片并打印路径，B站 App 扫码即登录，
 SESSDATA 自动写入 config.json；二维码过期自动换新。手动路径：浏览器登录 bilibili.com →
 F12 → Application → Cookies → 复制 `SESSDATA`。该文件已被 `.gitignore` 排除，不会被提交
 （含登录凭据，请勿分享）。抖音流程无需任何配置。
@@ -147,6 +146,9 @@ python scripts/apply_glossary.py "<输出目录>/01_分P名.txt"
 # （可选）抽取重点截图（需 ASCII 文件名时加 --ascii-names）
 python scripts/bili_screenshot.py "<输出目录>/metadata.json" "<输出目录>" "<输出目录>/images"
 
+# 时间索引深链填充（v3 笔记默认执行，short 跳过）
+python scripts/note_nav.py "<笔记.md>" --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
+
 # 生成笔记后的质量门禁（errors 为 0 才交付）
 python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
 ```
@@ -162,13 +164,16 @@ python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.js
 │   ├── bili_screenshot.py # 重点截图（锚点/自动关键词 + PyAV 抽帧 + 像素占比法 QC）
 │   ├── transcript_chunk.py# 长转写稿分块（map-reduce 前置）
 │   ├── apply_glossary.py  # ASR 术语校正（dry-run 报告 / --apply 落盘）
+│   ├── note_nav.py        # 时间索引深链填充 / v2 参考时间戳生成
+│   ├── clean_media.py     # 询问式媒体清理（默认只列清单、--apply 实删）
 │   ├── validate_note.py   # 笔记质量门禁（errors 为 0 才交付）
 │   ├── ensure_abogus.py   # abogus.py 缺失时从上游固定 commit 下载（SHA-256 校验）
 │   └── abogus.py          # 抖音 a_bogus 签名算法（GPLv3，按需下载，不入仓库）
 ├── tests/                 # 离线 pytest 测试（不联网、无需重依赖）
 ├── references/
-│   ├── anchors.json       # 截图时间戳锚点库
+│   ├── anchors.json       # 截图关键词锚点表（时刻由脚本按转写稿运行时推导）
 │   ├── asr-glossary.json  # ASR 技术术语校正表
+│   ├── glossary-user.example.json  # 用户层词表示例
 │   └── note-template.md   # 课堂笔记模板
 ├── config.example.json    # 配置模板（SESSDATA）
 └── LICENSE                # MIT
@@ -176,7 +181,7 @@ python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.js
 
 ## ⚠️ 已知限制
 
-- 长视频（>1小时）本地转写耗时约为视频时长的 1~3 倍（CPU int8）
+- 长视频（>1小时）本地转写耗时：CPU int8 约为视频时长的 1~3 倍（批量推理可缓解），有 NVIDIA GPU 时快于实时
 - ASR 转写的技术术语可能出错（如 IoC、Starter），生成笔记时建议结合上下文或代码仓库校正
 - 抖音依赖平台签名算法，平台升级时可能临时失效（表现为 detail 接口 403），需跟进上游项目更新签名实现
 - 抖音签名的 `abogus.py` 依赖上游仓库（BiliNote）托管：下载 URL 已固定到上游具体 commit 并做 SHA-256 校验；上游更新签名算法时，可用环境变量 `BILINOTE_ABOGUS_SHA=<新commit>` 临时指向新 revision，或按 `scripts/ensure_abogus.py` 文件头的手动安装步骤放置文件
