@@ -5,20 +5,21 @@
 用法:
     python validate_note.py <笔记.md> [--meta <metadata.json>] [--txt-dir <转写稿目录>]
 
-版本分派（模板 v2 规格 §4.1）:
-    按 frontmatter 的 template_version 分派规则集；无 frontmatter / v1 → 走下方
-    v1 规则（完全冻结，v1 笔记零改动通过）；v2 → 走 v2 规则集（三词文字标签
-    核心必考/重点掌握/了解即可，26 项检查：通用 15 项 + lecture L1~L12 +
-    short S1~S3，见 check_note_v2）。输出 JSON 额外带 template_version /
-    note_type 字段。
-    报告格式差异（§4.5 破坏性变更，仅 v2）：v2 的 errors/warnings 是
-    {"check","message","line"} 对象数组；v1 保持旧的字符串数组不变。
+按 frontmatter template_version 分派 v1/v2/v3 规则:
+    无 frontmatter / v1 → 走下方 v1 规则（完全冻结，v1 笔记零改动通过）；
+    v2 → 走 v2 规则集（三词文字标签 核心必考/重点掌握/了解即可；通用 +
+    lecture（L 系列）+ short（S 系列）三组检查，见 check_note_v2）；
+    v3 → 走 v3 规则集（V3 系列，见下文 v3 段落与 check_note_v3）。
+    输出 JSON 额外带 template_version / note_type 字段。
+    报告格式差异（仅 v2）：v2 的 errors/warnings 是 {"check","message","line"}
+    对象数组；v1 保持旧的字符串数组不变。
 
     v3（2026-10-04，复习资料定位）：正文（目录/标题/要点/代码注释/概念卡/答案）
     全面禁止时间戳；时刻只允许出现在文末「## 视频时间索引」的 NAV 折叠区
     （一级章节粒度条目，深链由 scripts/note_nav.py 填充）；废除 核心必考/
     重点掌握/了解即可 三词标签体系。检查项 V3-E1~E7 + 保留检查（V3-FM/V3-NT/
-    V3-SEC/V3-IDEA/V3-KM/V3-IMG/V3-MANIFEST/V3-RATIO），见 check_note_v3；
+    V3-SEC/V3-IDEA/V3-KM/V3-IMG/V3-MANIFEST/V3-RATIO），另有 V3-KM-LABEL
+    （mermaid 节点标签卫生，warning 级），见 check_note_v3；
     报告结构与 v2 相同（errors/warnings 对象数组、summary 字段、CLI 参数不变）。
 
 v1 检查项（errors 必须为 0 才通过；warnings 只提示）:
@@ -46,6 +47,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 ANCHOR_RE = re.compile(r"\[\d{1,2}:\d{2}\]")
@@ -116,7 +118,7 @@ def substantive_lines(lines: list[str]) -> list[str]:
 # ==================== 检查14（B2 新增，自包含可搬运函数） ====================
 
 def check_image_manifest(note_path: Path, manifest_path: Path) -> dict:
-    """manifest 图注 keyword + 时间对齐交叉校验（规格 §4.2 检查14，warning 级）。
+    """manifest 图注 keyword + 时间对齐交叉校验（检查14，warning 级）。
 
     自包含：只依赖本文件的 IMG_MD_RE / FENCE_RE / ANCHOR_LINE_RE / TS_LINE_RE
     等常量，可独立搬运或单测。规则：
@@ -420,17 +422,17 @@ def check_note(text: str, note_path: Path, meta_path: Path | None,
     return {"ok": not errors, "errors": errors, "warnings": warnings, "checks": checks}
 
 
-# ==================== v2 门禁（规格 §3/§4，B3 批次新增；v1 规则冻结不动） ====================
-# v2 一律使用三词文字标签（核心必考/重点掌握/了解即可），不再接受 ★ 符号（§4.1）。
-# v2 报告的 errors/warnings 为 {"check","message","line"} 对象数组（§4.5）。
+# ==================== v2 门禁（B3 批次新增；v1 规则冻结不动） ====================
+# v2 一律使用三词文字标签（核心必考/重点掌握/了解即可），不再接受 ★ 符号。
+# v2 报告的 errors/warnings 为 {"check","message","line"} 对象数组。
 
 V2_TAGS = ("核心必考", "重点掌握", "了解即可")
 V2_TAG_LINE_RE = re.compile(
     r"^\s*[-*]\s+\*\*(核心必考|重点掌握|了解即可)\*\*(?:\s+(\S.*))?\s*$")
-# 加粗开头的列表行（§3.1：非白名单标注词 → error，封死同义词漂移）
+# 加粗开头的列表行：非白名单标注词 → error，封死同义词漂移
 V2_BOLD_LIST_RE = re.compile(r"^\s*[-*]\s+\*\*([^*]+)\*\*")
 V2_ANCHOR_RE = re.compile(r"\[(\d{1,3}):(\d{2})\]")
-# §3.1 锚点 [mm:ss] 的非法变体（秒非两位 / 分钟超 3 位 / 时:分:秒）
+# 锚点 [mm:ss] 的非法变体（秒非两位 / 分钟超 3 位 / 时:分:秒）
 V2_BAD_TS_RES = (
     (re.compile(r"\[\d{1,3}:\d(?:\D|\Z)"), "秒必须是两位数字"),
     (re.compile(r"\[\d{4,}:\d{2}\]"), "分钟最多 3 位数字"),
@@ -475,7 +477,7 @@ def parse_frontmatter(text: str) -> dict:
 
 
 def rules_for(frontmatter: dict) -> str:
-    """§4.1 版本分派：无 frontmatter / `v1` → v1（冻结规则），其余 → v2。"""
+    """版本分派（v2 时代语义，冻结）：无 frontmatter / `v1` → v1，其余 → v2。"""
     v = (frontmatter.get("template_version") or "").strip()
     return "v1" if v in ("", "v1") else "v2"
 
@@ -570,7 +572,7 @@ def parse_quiz_questions(lines: list[str], start: int, end: int) -> list[dict]:
 
 def validate_mermaid_blocks(lines: list[str], start: int,
                             end: int) -> tuple[int, list[str]]:
-    """§3.3 mermaid 校验：fence 语言 / 首行 mindmap|graph|flowchart / mindmap 缩进。
+    """mermaid 校验：fence 语言 / 首行 mindmap|graph|flowchart / mindmap 缩进。
     返回 (mermaid 块数, 问题列表)。"""
     problems: list[str] = []
     blocks = 0
@@ -613,10 +615,10 @@ def validate_mermaid_blocks(lines: list[str], start: int,
 
 def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
                   txt_dir: Path | None) -> dict:
-    """v2 门禁（规格 §4.2 通用 15 项 + §4.3 分型 L1~L12 / S1~S3）。
+    """v2 门禁：通用检查 + lecture（L 系列）/ short（S 系列）分型检查。
 
-    errors/warnings 为对象数组 {"check","message","line"}（§4.5 破坏性变更，
-    仅 v2 报告使用；v1 报告保持字符串数组）。
+    errors/warnings 为对象数组 {"check","message","line"}（仅 v2 报告使用；
+    v1 报告保持字符串数组）。
     """
     errors: list[dict] = []
     warnings: list[dict] = []
@@ -902,7 +904,7 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
         card_sec_end = next_h2_after(lines, card_head + 1)
         cards = parse_concept_cards(lines, card_head + 1, card_sec_end, fence_state)
         card_names = {c["name"] for c in cards}
-        # 概念卡标题格式（§3.2）：### 概念名（三词白名单标签）
+            # 概念卡标题格式：### 概念名（三词白名单标签）
         for i in range(card_head + 1, card_sec_end):
             if fence_state[i]:
                 continue
@@ -957,7 +959,7 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
         core_cards = [c for c in cards if c["tag"] == "核心必考"]
         core_card_names = [c["name"] for c in core_cards]
 
-        # L3/L4/L5/L6：卡片字段（§3.2）
+        # L3/L4/L5/L6：卡片字段
         for c in cards:
             defs = c["fields"].get("定义")
             appear = c["fields"].get("出现")
@@ -1139,6 +1141,8 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
 #   （lecture；short 可省）、V3-IMG 引用图片存在 [error]；V3-MANIFEST manifest
 #   图注交叉校验（贴近度放宽：标注行已废除，时间项自动跳过）、V3-RATIO 字数比
 #   [warning]。
+#   V3-KM-LABEL mermaid 节点标签卫生（全笔记 mermaid 块，warning）：节点标签
+#   折算宽度 >12 字（全角 1/半角 0.5）或含半角 ( ) [ ] { } " 字符；全角（）合法。
 
 V3_INDEX_HEADING = "视频时间索引"
 V3_LOCATE_TOLERANCE = 5   # 条目时刻归属分P的 ±5s 容差（与 note_nav.py 同口径）
@@ -1170,6 +1174,20 @@ V3_QUIZ_RANGE = {"lecture": (4, 7), "short": (2, 3)}
 # V3-E3：B站深链（frontmatter 缺 bvid 时退化用宽松格式兜底）
 V3_BILI_LINK_RE = re.compile(r"^https://www\.bilibili\.com/video/\S+\?p=\d+&t=\d+$")
 V3_TXT_PAGE_RE = re.compile(r"^(\d{1,3})_")   # 转写稿文件名页码前缀 <页码>_*.txt
+# V3-KM-LABEL：节点标签折算宽度上限——全角字符记 1、半角记 0.5
+# （如 ApplicationContext 折算 9 字），避免纯英文技术名按原始字符数误报超长
+V3_LABEL_MAX_WIDTH = 12
+# V3-KM-LABEL：标签内非法半角字符（mermaid 形状定界符/引号；全角（）合法）
+V3_LABEL_BAD_RE = re.compile(r'[()\[\]{}"]')
+# V3-KM-LABEL：mindmap 节点行的形状壳（整行被包裹时剥壳取内层文本）
+V3_MM_SHAPE_RES = (
+    re.compile(r"^(?:\w+\s*)?\(\((.+)\)\)$"),   # 圆形 root((text)) / ((text))
+    re.compile(r"^\{\{(.+)\}\}$"),              # 六边形 {{text}}
+    re.compile(r"^\((.+)\)$"),                  # 圆角 (text)
+    re.compile(r"^\[(.+)\]$"),                  # 方形 [text]
+)
+# V3-KM-LABEL：graph/flowchart 节点标签 [text]（([text]) 的内层同样命中）
+V3_GF_LABEL_RE = re.compile(r"\[([^\[\]]+)\]")
 
 
 def v3_exempt_lines(text: str, lines: list[str]) -> set[int]:
@@ -1247,6 +1265,74 @@ def parse_concept_cards_v3(lines: list[str], start: int, end: int,
         if fmm and cur is not None and fmm.group(1) not in cur["fields"]:
             cur["fields"][fmm.group(1)] = (fmm.group(2).strip(), i + 1)
     return cards
+
+
+def v3_label_width(label: str) -> float:
+    """标签折算宽度：全角（east_asian_width F/W）记 1 字、半角记 0.5 字。
+
+    「ApplicationContext」折算 9 字——纯英文技术名不因原始字符数超限而误报。
+    """
+    return sum(1.0 if unicodedata.east_asian_width(ch) in ("F", "W") else 0.5
+               for ch in label)
+
+
+def v3_mermaid_label_problems(lines: list[str]) -> list[tuple[int, str, str]]:
+    """V3-KM-LABEL：全笔记 mermaid 块的节点标签卫生扫描。
+
+    块定位与 validate_mermaid_blocks 同口径（V2_FENCE_LANG_RE / FENCE_RE 走
+    fence，首行命中 V2_MERMAID_FIRST_RE 才处理）。标签提取（实现从简，识别
+    不了的行跳过）：
+      - mindmap：缩进层级文本行，整行被形状壳（root((..))/((..))/(..)/[..]/
+        {{..}}）包裹时剥壳取内层，否则整行即标签；
+      - graph/flowchart：行内全部 [..]（含 ([..]) 的内层文本）。
+    判定：标签折算宽度 > V3_LABEL_MAX_WIDTH，或含半角 ( ) [ ] { } " 字符
+    （全角（）合法）→ 问题。返回 [(行号, 标签, 问题描述)]。
+    """
+    problems: list[tuple[int, str, str]] = []
+
+    def check(label: str, line_no: int) -> None:
+        if V3_LABEL_BAD_RE.search(label):
+            problems.append((line_no, label,
+                             '含半角 ( ) [ ] { } " 字符，请改全角（）'))
+        elif v3_label_width(label) > V3_LABEL_MAX_WIDTH:
+            problems.append((line_no, label,
+                             f"折算 {v3_label_width(label):g} 字"
+                             f"（上限 {V3_LABEL_MAX_WIDTH}），请缩短标签"))
+
+    i = 0
+    while i < len(lines):
+        m = V2_FENCE_LANG_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        lang = m.group(1).lower()
+        j = i + 1
+        while j < len(lines) and not FENCE_RE.match(lines[j]):
+            j += 1
+        if lang == "mermaid":
+            first = next((l.strip() for l in lines[i + 1:j] if l.strip()), "")
+            if V2_MERMAID_FIRST_RE.match(first):
+                if first.startswith("mindmap"):
+                    for k in range(i + 1, j):
+                        stripped = lines[k].strip()
+                        if not stripped or stripped.startswith(("%%", "::")):
+                            continue  # 注释 / icon 指令行跳过
+                        label = stripped
+                        for shape in V3_MM_SHAPE_RES:
+                            sm = shape.match(stripped)
+                            if sm:
+                                label = sm.group(1).strip()
+                                break
+                        check(label, k + 1)
+                else:  # graph / flowchart：取行内全部 [..] 标签
+                    for k in range(i + 1, j):
+                        stripped = lines[k].strip()
+                        if not stripped or stripped.startswith("%%"):
+                            continue
+                        for gm in V3_GF_LABEL_RE.finditer(stripped):
+                            check(gm.group(1).strip(), k + 1)
+        i = j + 1
+    return problems
 
 
 def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
@@ -1623,6 +1709,14 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
         checks["knowledge_map"] = {"passed": None,
                                    "note": "short 型知识地图可省（不检查）"}
 
+    # ---- V3-KM-LABEL：mermaid 节点标签卫生（全笔记 mermaid 块）[warning] ----
+    label_problems = v3_mermaid_label_problems(lines)
+    for ln, label, reason in label_problems:
+        warn("V3-KM-LABEL", f"mermaid 节点标签「{label[:30]}」{reason}"
+                            f"（第{ln}行）", ln)
+    checks["mermaid_labels"] = {"passed": not label_problems,
+                                "lines": [ln for ln, _, _ in label_problems]}
+
     # ---- V3-IMG：引用图片真实存在 ----
     referenced: set[str] = set()
     for m in IMG_MD_RE.finditer(text):
@@ -1700,7 +1794,7 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
 
 def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = None,
                         txt_dir: Path | None = None) -> dict:
-    """§4.1 版本分派入口：按 frontmatter 的 template_version 选择 v1/v2/v3 规则集。
+    """版本分派入口：按 frontmatter 的 template_version 选择 v1/v2/v3 规则集。
 
     v3 → check_note_v3（对象数组报告，正文全面禁时刻）；v1：check_note（冻结，
     报告保持字符串数组），仅追加 template_version / note_type 两个信息字段；
@@ -1754,7 +1848,7 @@ def main():
     meta_path = Path(args.meta) if args.meta else None
     txt_dir = Path(args.txt_dir) if args.txt_dir else None
 
-    # §4.1 版本分派：无 frontmatter / v1 → v1 冻结规则（报告保持字符串数组，
+    # 版本分派：无 frontmatter / v1 → v1 冻结规则（报告保持字符串数组，
     # 仅追加 template_version/note_type 两个信息字段）；v2 → 新规则集（对象数组）。
     report = check_note_dispatch(text, note_path, meta_path, txt_dir)
     print_json_report(report, indent=2)

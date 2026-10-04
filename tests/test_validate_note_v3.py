@@ -821,3 +821,62 @@ def test_ratio_out_of_range_warns(tmp_path):
     assert wr and "超出" in wr[0]["message"]
     assert report["checks"]["length_ratio"]["passed"] is False
     assert report["ok"] is True
+
+
+# ==================== V3-KM-LABEL：mermaid 节点标签卫生 ====================
+
+def test_km_label_overlong_mindmap_label_warns(tmp_path):
+    """mindmap 节点标签折算宽度超 12 字 → V3-KM-LABEL warning（不挡交付）。"""
+    text = lecture_note().replace(
+        "      控制反转\n",
+        "      控制反转与依赖注入是Spring框架IoC容器的两种表述说法\n")
+    report = check_v3(tmp_path, text)
+    w = warns_of(report, "V3-KM-LABEL")
+    assert w and "控制反转与依赖注入" in w[0]["message"]
+    assert "缩短" in w[0]["message"]
+    assert w[0]["line"] > 0
+    assert report["ok"] is True
+
+
+def test_km_label_halfwidth_parens_in_graph_label_warns(tmp_path):
+    """graph 形态：节点标签含半角括号 → warning（半角定界符破坏 mermaid 语法）。"""
+    text = lecture_note().replace(
+        "## 概念卡片",
+        "```mermaid\ngraph TD\n  A[依赖注入(DI)] --> B[容器启动]\n```\n\n## 概念卡片")
+    report = check_v3(tmp_path, text)
+    w = warns_of(report, "V3-KM-LABEL")
+    assert w and "依赖注入(DI)" in w[0]["message"]
+    assert "全角" in w[0]["message"]
+    assert report["ok"] is True
+
+
+def test_km_label_flowchart_stadium_overlong_warns(tmp_path):
+    """flowchart 形态：([超长标签]) 提取内层文本后折算超限 → warning。"""
+    text = lecture_note().replace(
+        "## 概念卡片",
+        "```mermaid\nflowchart LR\n"
+        "  S([容器扫描注册与实例化的完整启动流程一览]) --> E[完成]\n```\n\n## 概念卡片")
+    report = check_v3(tmp_path, text)
+    w = warns_of(report, "V3-KM-LABEL")
+    assert w and "容器扫描注册" in w[0]["message"]
+    assert report["ok"] is True
+
+
+def test_km_label_fullwidth_parens_not_warned(tmp_path):
+    """全角（）合法：mindmap 标签含全角括号不触发 V3-KM-LABEL（基线亦零触发）。"""
+    text = lecture_note().replace("      依赖注入\n", "      依赖注入（DI）\n")
+    report = check_v3(tmp_path, text)
+    assert warns_of(report, "V3-KM-LABEL") == []
+    assert report["checks"]["mermaid_labels"]["passed"] is True
+
+
+def test_km_label_v2_dispatch_not_checked(tmp_path):
+    """冻结确认：同类标签内容在 v2 分派下不触发 V3-KM-LABEL（检查只挂 v3）。"""
+    text = (lecture_note()
+            .replace("template_version: v3", "template_version: v2")
+            .replace("      控制反转\n",
+                     "      控制反转与依赖注入是Spring框架IoC容器的两种表述说法\n"))
+    report = check_dispatch(tmp_path, text)
+    assert report["template_version"] == "v2"
+    ids = {x["check"] for x in report["errors"] + report["warnings"]}
+    assert "V3-KM-LABEL" not in ids
