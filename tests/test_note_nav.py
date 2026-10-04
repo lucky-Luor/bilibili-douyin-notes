@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""note_nav.py 的离线测试：幂等替换 / 追加 / 不配对不改文件 / 分P归属 / 抖音纯文本。"""
+"""note_nav.py 的离线测试：幂等替换 / 追加 / 不配对不改文件 / 分P归属 / 抖音纯文本
+/ v3 时间索引填链 / v2 老笔记回归。"""
 import hashlib
 import json
 
@@ -26,6 +27,28 @@ NOTE = """# 课堂笔记
 
 DOUYIN_META = {"platform": "douyin", "video_id": "7123456789",
                "pages": [{"page": 1, "part": "视频", "duration": 60}]}
+
+# v3 笔记：正文去时间戳，文末 <details> 内由模型写好 NAV 标记对与无链接条目
+V3_NOTE = """---
+template_version: v3
+note_type: lecture
+---
+
+# 课堂笔记
+
+（v3 正文：全面去时间戳）
+
+<details>
+<summary>视频时间索引</summary>
+
+<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->
+- [00:05] 1. 开场与课程介绍
+- [08:45] 2. 控制反转与容器
+- [00:22] 3. ApplicationContext 预实例化
+<!-- NAV:END -->
+
+</details>
+"""
 
 
 def setup_files(tmp_path, note=NOTE, meta=META):
@@ -188,3 +211,150 @@ def test_short_note_type_skips(tmp_path):
 def test_missing_bvid_for_bilibili_is_error(tmp_path):
     setup_files(tmp_path, meta={"platform": "bilibili", "pages": []})
     assert run(tmp_path) == 1
+
+
+# ---------- v3 模式：文末时间索引条目机械填链 ----------
+
+def test_v3_fill_links_single_and_multipage(tmp_path, capsys):
+    setup_files(tmp_path, note=V3_NOTE)
+    assert run(tmp_path) == 0
+    text = read(tmp_path)
+    block = text.split("<!-- NAV:BEGIN")[1]
+    # 单P（P1）与跨P（P2）条目均填链，t 为分P内相对秒
+    assert ("- [00:05](https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=5)"
+            " 1. 开场与课程介绍") in block
+    assert ("- [08:45](https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=525)"
+            " 2. 控制反转与容器") in block
+    assert ("- [00:22](https://www.bilibili.com/video/BV1xx411c7mD?p=2&t=22)"
+            " 3. ApplicationContext 预实例化") in block
+    # 条目原位重写：不排序、不增删行，标记对与 <details> 外部结构原样保留
+    assert block.index("00:05") < block.index("08:45") < block.index("00:22")
+    assert text.startswith(V3_NOTE.split("<!-- NAV:BEGIN")[0])
+    assert "</details>" in text
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary == {"status": "ok", "mode": "v3", "written": 3, "skipped": 0,
+                       "platform": "bilibili", "note_type": "lecture"}
+
+
+def test_v3_multipage_relative_seconds(tmp_path):
+    """多P：t 必须是分P内相对秒（U1 语义），而非全片累计秒。"""
+    note = ("---\ntemplate_version: v3\n---\n\n# 笔记\n\n"
+            "<!-- NAV:BEGIN 由脚本生成 -->\n- [00:40] P2 中段\n<!-- NAV:END -->\n")
+    setup_files(tmp_path, note=note)
+    (tmp_path / "txt" / "02_P2.txt").write_text("[00:40] P2 中段\n",
+                                               encoding="utf-8")
+    assert run(tmp_path) == 0
+    block = read(tmp_path).split("<!-- NAV:BEGIN")[1]
+    assert ("- [00:40](https://www.bilibili.com/video/BV1xx411c7mD?p=2&t=40)"
+            " P2 中段") in block
+    assert "?p=1" not in block  # [00:40] 只在 P2 命中，不得误归属 P1
+
+
+def test_v3_idempotent_second_run_byte_identical(tmp_path, capsys):
+    setup_files(tmp_path, note=V3_NOTE)
+    run(tmp_path)
+    first = (tmp_path / "note.md").read_bytes()
+    assert run(tmp_path) == 0
+    second = (tmp_path / "note.md").read_bytes()
+    assert first == second  # 已带链接条目跳过，二次运行不改文件
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary["status"] == "ok" and summary["mode"] == "v3"
+    assert summary["written"] == 0 and summary["skipped"] == 0
+
+
+def test_v3_skips_already_linked_entries(tmp_path):
+    """混合块：已带链接条目原样保留，只填无链接条目。"""
+    note = ("---\ntemplate_version: v3\n---\n\n# 笔记\n\n"
+            "<!-- NAV:BEGIN 由脚本生成 -->\n"
+            "- [00:05](https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=5) 已填\n"
+            "- [00:22] 未填\n"
+            "<!-- NAV:END -->\n")
+    setup_files(tmp_path, note=note)
+    assert run(tmp_path) == 0
+    block = read(tmp_path).split("<!-- NAV:BEGIN")[1]
+    assert ("- [00:05](https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=5) 已填"
+            in block)
+    assert ("- [00:22](https://www.bilibili.com/video/BV1xx411c7mD?p=2&t=22) 未填"
+            in block)
+
+
+def test_v3_douyin_keeps_plain_text_without_warning(tmp_path, capsys):
+    setup_files(tmp_path, note=V3_NOTE, meta=DOUYIN_META)
+    assert run(tmp_path) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""  # 抖音不填链属正常，不告警
+    block = read(tmp_path).split("<!-- NAV:BEGIN")[1]
+    assert "http" not in block
+    assert "- [00:05] 1. 开场与课程介绍" in block  # 条目保持纯文本
+    summary = json.loads(captured.out.strip().splitlines()[-1])
+    assert summary["platform"] == "douyin" and summary["written"] == 0
+
+
+def test_v3_short_note_type_skips(tmp_path, capsys):
+    note = "---\ntemplate_version: v3\nnote_type: short\n---\n\n# 笔记\n"
+    setup_files(tmp_path, note=note)
+    before = digest(tmp_path)
+    assert run(tmp_path) == 0
+    assert digest(tmp_path) == before  # short 维持现有跳过行为，文件不动
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary["status"] == "skipped"
+
+
+def test_v3_missing_markers_warn_and_no_write(tmp_path, capsys):
+    note = "---\ntemplate_version: v3\n---\n\n# 笔记\n\n正文无 NAV 标记。\n"
+    setup_files(tmp_path, note=note)
+    before = digest(tmp_path)
+    assert run(tmp_path) == 0  # 存在性由门禁管，脚本正常退出
+    captured = capsys.readouterr()
+    assert "NAV" in captured.err  # stderr warning
+    assert digest(tmp_path) == before  # 不改文件
+    summary = json.loads(captured.out.strip().splitlines()[-1])
+    assert summary["status"] == "skipped" and summary["written"] == 0
+
+
+def test_v3_empty_entry_area_warn_and_no_write(tmp_path, capsys):
+    note = ("---\ntemplate_version: v3\n---\n\n# 笔记\n\n"
+            "<!-- NAV:BEGIN 由脚本生成 -->\n<!-- NAV:END -->\n")
+    setup_files(tmp_path, note=note)
+    before = digest(tmp_path)
+    assert run(tmp_path) == 0
+    captured = capsys.readouterr()
+    assert "条目区为空" in captured.err
+    assert digest(tmp_path) == before
+    summary = json.loads(captured.out.strip().splitlines()[-1])
+    assert summary["status"] == "skipped"
+
+
+def test_v3_entry_without_matching_page_warned_and_kept(tmp_path, capsys):
+    note = ("---\ntemplate_version: v3\n---\n\n# 笔记\n\n"
+            "<!-- NAV:BEGIN 由脚本生成 -->\n- [99:99] 凭空章节\n<!-- NAV:END -->\n")
+    setup_files(tmp_path, note=note)
+    assert run(tmp_path) == 0
+    captured = capsys.readouterr()
+    assert "未找到归属分P" in captured.err
+    block = read(tmp_path).split("<!-- NAV:BEGIN")[1]
+    assert "- [99:99] 凭空章节" in block  # 该行保持原样（不填链）
+    summary = json.loads(captured.out.strip().splitlines()[-1])
+    assert summary["skipped"] == 1 and summary["written"] == 0
+
+
+def test_v3_unpaired_markers_error_and_no_write(tmp_path):
+    note = ("---\ntemplate_version: v3\n---\n\n# 笔记\n\n"
+            "<!-- NAV:BEGIN 由脚本生成 -->\n- [00:05] 开场\n")  # 缺 END
+    setup_files(tmp_path, note=note)
+    before = digest(tmp_path)
+    assert run(tmp_path) == 1
+    assert digest(tmp_path) == before
+
+
+def test_v2_note_regression_unchanged_dispatch(tmp_path, capsys):
+    """无 template_version 的 v2 老笔记不走 v3 分支：仍由标注行重算 NAV 块。"""
+    note = NOTE + "<!-- NAV:BEGIN 旧内容 -->\n手写垃圾行\n<!-- NAV:END -->\n"
+    setup_files(tmp_path, note=note)
+    assert run(tmp_path) == 0
+    block = read(tmp_path).split("<!-- NAV:BEGIN")[1]
+    assert "## 参考时间戳" in block  # v1/v2 语义：整块重新生成
+    assert "★★★：ApplicationContext 预实例化" in block
+    assert "手写垃圾行" not in block
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary["mode"] == "replace"  # 非 v3 mode

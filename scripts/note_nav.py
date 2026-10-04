@@ -14,13 +14,23 @@
       （与 BiliNote 生产实现一致：t 是分P内相对秒而非全片累计秒，待人工实测
       确认）；找不到归属分P的锚点跳过并 stderr warning。
     - 抖音（metadata platform=douyin）：输出纯文本行，无链接。
-    - 幂等：替换笔记中 <!-- NAV:BEGIN ... --> 与 <!-- NAV:END --> 之间内容；
-      标记缺失 → 追加到文件末尾；标记不配对 → 报错退出且不改文件。
+    - 幂等（v1/v2）：替换笔记中 <!-- NAV:BEGIN ... --> 与 <!-- NAV:END --> 之间
+      内容；标记缺失 → 追加到文件末尾；标记不配对 → 报错退出且不改文件。
       写入用 .tmp → os.replace 原子替换。
     - frontmatter note_type=short 时跳过（short 的参考时间戳可省，§1.1/§2.2）。
+    - v3 模式（frontmatter template_version=v3）：正文全面去时间戳，文末
+      <details> 的「视频时间索引」由模型写好 NAV 标记对与无链接条目
+      `- [mm:ss] 标题`（模型永不生成 URL），本脚本只做机械填链：沿用 ±5s 容差
+      的分P归属，重写为
+      `- [mm:ss](https://www.bilibili.com/video/<bvid>?p=N&t=<分P内相对秒>) 标题`。
+      已带链接的条目跳过（幂等）；找不到归属分P → stderr warning 并跳过该行；
+      platform=douyin 保持纯文本（属正常，不告警）；标记缺失或条目区为空 →
+      stderr warning、不改文件、正常退出 0（存在性由门禁管）；标记不配对 →
+      报错退出且不改文件。
 
 输出: stdout 一行 JSON 摘要（ensure_ascii=True）：
     {"status","mode","written","skipped","platform","note_type"}
+    （mode：v1/v2 为 "append"/"replace"；v3 为 "v3"）
 """
 import argparse
 import json
@@ -33,6 +43,8 @@ NAV_BEGIN_RE = re.compile(r"^\s*<!--\s*NAV:BEGIN\b.*?-->\s*$")
 NAV_END_RE = re.compile(r"^\s*<!--\s*NAV:END\b.*?-->\s*$")
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
 NOTE_TYPE_RE = re.compile(r"^note_type\s*:\s*[\"']?(\S+?)[\"']?\s*$", re.MULTILINE)
+TEMPLATE_VERSION_RE = re.compile(
+    r"^template_version\s*:\s*[\"']?(\S+?)[\"']?\s*$", re.MULTILINE)
 FENCE_RE = re.compile(r"^\s*```")
 TS_RE = re.compile(r"\[(\d{1,3}):(\d{2})\]")
 
@@ -52,6 +64,13 @@ SECTION_TS_RE = re.compile(
     r"^##\s+(?P<title>.+?)\s*[（(](?P<ts>\d{1,3}:\d{2})[）)]\s*$")
 # 转写稿文件名页码前缀（bili_fetch/transcribe 契约：<页码2位>_<分P名>.txt）
 TXT_PAGE_RE = re.compile(r"^(\d{1,3})_")
+
+# v3 模式：文末「视频时间索引」的无链接条目（模型只写 `- [mm:ss] 标题`，URL 由
+# 本脚本按分P归属机械填入）。`\s+(?!\()` 排除已带链接的条目 `- [mm:ss](url) 标题`
+# （幂等跳过）；标题须以非空白开头，与 MARK_LINE_RE 的要点句口径一致。
+V3_ENTRY_RE = re.compile(
+    r"^(?P<indent>\s*)-\s*\[(?P<ts>\d{1,3}:\d{2})\]\s+(?!\()(?P<title>\S.*?)\s*$")
+V3_LINKED_RE = re.compile(r"^\s*-\s*\[\d{1,3}:\d{2}\]\s*\(")
 
 NAV_BEGIN_TEXT = "<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->"
 NAV_END_TEXT = "<!-- NAV:END -->"
@@ -182,6 +201,73 @@ def atomic_write(path: Path, content: str):
     os.replace(tmp, path)
 
 
+def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
+            bvid: str, note_type: str) -> int:
+    """v3 模式：为文末时间索引的无链接条目机械填链（标记对由模型写好，不追加）。
+
+    标记缺失/条目区为空 → stderr warning、不改文件、正常退出 0（存在性由门禁管）；
+    标记不配对 → 报错退出且不改文件；条目行原位重写（不排序、不增删行），
+    写入沿用 .tmp → os.replace 原子替换。
+    """
+    lines = text.splitlines()
+    begins = [i for i, l in enumerate(lines) if NAV_BEGIN_RE.match(l)]
+    ends = [i for i, l in enumerate(lines) if NAV_END_RE.match(l)]
+    if not begins and not ends:
+        print("warning: v3 笔记未找到 NAV:BEGIN/NAV:END 标记对，跳过填链"
+              "（条目存在性由门禁检查）", file=sys.stderr)
+        print(json.dumps({"status": "skipped", "reason": "v3 NAV 标记缺失",
+                          "mode": "v3", "written": 0, "skipped": 0,
+                          "platform": platform,
+                          "note_type": note_type or "lecture"},
+                         ensure_ascii=True))
+        return 0
+    if len(begins) != 1 or len(ends) != 1 or begins[0] >= ends[0]:
+        err = (f"NAV 标记不配对（BEGIN×{len(begins)}、END×{len(ends)}，或顺序颠倒），"
+               "拒绝修改文件")
+        print(f"error: {err}", file=sys.stderr)
+        print(json.dumps({"status": "error", "error": err}, ensure_ascii=True))
+        return 1
+    inner = lines[begins[0] + 1:ends[0]]
+    if not any(V3_ENTRY_RE.match(l) or V3_LINKED_RE.match(l) for l in inner):
+        print("warning: v3 NAV 条目区为空（无任何时间索引条目），跳过填链",
+              file=sys.stderr)
+        print(json.dumps({"status": "skipped", "reason": "v3 NAV 条目区为空",
+                          "mode": "v3", "written": 0, "skipped": 0,
+                          "platform": platform,
+                          "note_type": note_type or "lecture"},
+                         ensure_ascii=True))
+        return 0
+    page_index = build_page_index(txt_dir) if platform != "douyin" else {}
+    out = list(lines)
+    written = skipped = 0
+    for offset, line in enumerate(inner):
+        m = V3_ENTRY_RE.match(line)
+        if not m:
+            continue  # 已带链接 / 空行 / 其他内容：原样保留（幂等）
+        ts_text, title = m.group("ts"), m.group("title")
+        if platform == "douyin":  # 抖音无深链语义：保持纯文本，属正常不告警
+            continue
+        mm, ss = ts_text.split(":")
+        loc = locate_page(page_index, int(mm) * 60 + int(ss))
+        if loc is None:
+            print(f"warning: v3 条目 [{ts_text}]（{title[:30]}）未找到归属分P，已跳过",
+                  file=sys.stderr)
+            skipped += 1
+            continue
+        page, rel = loc  # U1: t 用该分P内相对秒（与 v1/v2、BiliNote 一致）
+        url = f"https://www.bilibili.com/video/{bvid}?p={page}&t={int(round(rel))}"
+        out[begins[0] + 1 + offset] = (
+            f"{m.group('indent')}- [{ts_text}]({url}) {title}")
+        written += 1
+    new_text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
+    if new_text != text:
+        atomic_write(note_path, new_text)
+    print(json.dumps({"status": "ok", "mode": "v3", "written": written,
+                      "skipped": skipped, "platform": platform,
+                      "note_type": note_type or "lecture"}, ensure_ascii=True))
+    return 0
+
+
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -198,9 +284,12 @@ def main(argv=None) -> int:
 
     fm = FRONTMATTER_RE.match(text)
     note_type = ""
+    template_version = ""
     if fm:
         nt = NOTE_TYPE_RE.search(fm.group(1))
         note_type = (nt.group(1) if nt else "").strip().lower()
+        tv = TEMPLATE_VERSION_RE.search(fm.group(1))
+        template_version = (tv.group(1) if tv else "").strip().lower()
     if note_type == "short":  # §1.1/§2.2：short 的参考时间戳可省，直接跳过
         print(json.dumps({"status": "skipped", "reason": "note_type=short",
                           "written": 0, "skipped": 0}, ensure_ascii=True))
@@ -213,6 +302,9 @@ def main(argv=None) -> int:
                           "error": "metadata 缺少 bvid/video_id，无法生成深链"},
                          ensure_ascii=True))
         return 1
+
+    if template_version == "v3":  # v3：条目已由模型写好，仅按分P归属机械填链
+        return main_v3(note_path, text, txt_dir, platform, bvid, note_type)
 
     entries = collect_entries(text)
     page_index = build_page_index(txt_dir) if platform != "douyin" else {}
