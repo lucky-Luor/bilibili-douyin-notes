@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """douyin_fetch.py 纯函数的离线测试（网络一律 mock；gmssl 缺失时由 conftest 打桩）。"""
+import json
+import sys
 import urllib.request
 
 import pytest
@@ -112,3 +114,26 @@ def test_note_type_lecture_for_long_or_multi_page():
 def test_note_type_boundary_600s():
     assert douyin_fetch.note_type_for(600, 1) == "short"
     assert douyin_fetch.note_type_for(601, 1) == "lecture"
+
+
+# ---------- metadata.json 原子写（main 集成，网络/下载全 mock） ----------
+
+def _run_main(tmp_path, monkeypatch):
+    """mock 掉网络相关函数，预置 >1MB 本地视频跳过下载，跑一遍 main()。"""
+    detail = {"desc": "原子写测试*标题", "author": {"nickname": "UP"},
+              "video": {"duration": 65000}}
+    (tmp_path / "media_p01.mp4").write_bytes(b"0" * (1024 * 1024 + 1))
+    monkeypatch.setattr(douyin_fetch, "extract_video_id", lambda text: "7301234567890123456")
+    monkeypatch.setattr(douyin_fetch, "fetch_aweme_detail", lambda aweme_id: detail)
+    monkeypatch.setattr(douyin_fetch, "check_not_album", lambda d: None)
+    monkeypatch.setattr(sys, "argv",
+                        ["douyin_fetch.py", "https://www.douyin.com/video/x", str(tmp_path)])
+    douyin_fetch.main()
+
+
+def test_main_metadata_json_atomic_write(tmp_path, monkeypatch):
+    _run_main(tmp_path, monkeypatch)
+    meta = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
+    assert meta["video_id"] == "7301234567890123456"
+    assert meta["pages"][0]["media_path"] == "media_p01.mp4"
+    assert not list(tmp_path.glob("*.tmp")), "原子写不应残留 .tmp 临时文件"

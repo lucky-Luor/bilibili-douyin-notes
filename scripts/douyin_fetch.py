@@ -240,9 +240,9 @@ def safe_name(name: str) -> str:
 
 
 def note_type_for(duration_sec, page_count) -> str:
-    """建议笔记型别（规格 §4.4 坑③）：short 当且仅当 总时长 ≤600s 且 分P数 == 1，
-    否则 lecture。分P数只做 tiebreak，不作主判据。脚本只给建议，
-    Agent 可在笔记 frontmatter 的 note_type 覆盖，门禁只读 frontmatter。
+    """建议笔记型别（判据见 references/note-template.md）：short 当且仅当
+    总时长 ≤600s 且 分P数 == 1，否则 lecture。分P数只做 tiebreak，不作主判据。
+    脚本只给建议，Agent 可在笔记 frontmatter 的 note_type 覆盖，门禁只读 frontmatter。
     （与 bili_fetch.note_type_for 同一套判据，抖音视频恒为单分P。）"""
     return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"
 
@@ -291,7 +291,10 @@ def main():
                    "media_path": media.name, "subtitle": False}],
     }
     meta_path = outdir / "metadata.json"
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 原子写：先写 .tmp 再 os.replace，中断不留半个 metadata.json（与 bili_fetch 一致）
+    tmp = meta_path.with_name(meta_path.name + ".tmp")
+    tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, meta_path)
 
     # ensure_ascii=True：GBK 管道下也不崩，json.loads 后 emoji 照样还原（M3）
     print(json.dumps({
