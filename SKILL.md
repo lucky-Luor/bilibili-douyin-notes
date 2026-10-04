@@ -20,7 +20,7 @@ description: 把B站/抖音视频整理成Markdown课堂笔记。用户发来 bi
 - 脚本目录：本 skill 安装目录下的 `scripts/`（下文命令中的绝对路径请替换为你的实际安装路径）
 - 配置文件：本 skill 安装目录下的 `config.json`（存放 SESSDATA）
 - 参考资产：
-  - `references/note-template.md` —— 课堂笔记模板 v2（骨架、三词标签、语法契约、证据锚点规范）
+  - `references/note-template.md` —— 课堂笔记模板 v3（骨架、要点表达、语法契约、时间戳规范）
   - `references/asr-glossary.json` —— ASR 术语纠错词表（真实错法→正确写法）
   - `references/anchors.json` —— 截图锚点关键词表（按分P，可按需补充）
 
@@ -88,70 +88,103 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 
 ### 第三步：生成课堂笔记
 
-> **使用场景定位（2026-10-04）**：本 skill 解决的是"看完课不用自己做笔记"——
-> 产出的是**课后复习资料**，读者不需要拿笔记跳回视频。视频时间戳是可选装饰，
-> 默认少用（每小节至多一两处关键处），不做参考时间戳导航章节；内容吸收效率
-> （要点分级、概念卡片、自测题）才是笔记的主体。
+> **使用场景定位（2026-10-04，v3）**：本 skill 解决的是“看完课不用自己做笔记”——
+> 产出的是**课后复习资料**，正文按技术知识体系组织、阅读连贯：**正文零时间戳、
+> 零考试向标签**（三词标签体系废除，要点用普通列表 + 关键术语加粗）；视频时间戳
+> 只存在于文末折叠的“视频时间索引”，供回看原片时跳转。
 
 1. 读取 metadata.json（分P结构、时长）+ 各分P转写/字幕文本。
 2. **ASR 术语校正（工具化，不是凭感觉）**：先跑
    `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，按类别分组只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份，命中词条 hits 自动累加）。词表分两层：仓库层 `references/asr-glossary.json`（编程/美食/游戏/通用大类）+ 用户层（输出目录 `glossary.user.json` 或 `~/.zcode/bdn-glossary.user.json`，同键用户层优先）；候选词命中只报告（标 `[候选]`）永不替换。**维护闭环**：发现词表未覆盖的新错法 → `--add "错法=正确词" --category 编程`（或 `--candidate` 先入候选、`--promote "错法"` 转正）；`--list` 查看全部；`--categories`/`--topic` 控制启用范围。注意：转写阶段已自动把高频术语注入 initial_prompt（见第二步），词表越丰富转写越准。
 3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节。禁止跳过分块直接全文阅读长转写稿。
-4. 按 `references/note-template.md`（**v2 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。生成前必读该模板文件。v2 硬性要求：
-   - **frontmatter**（`---` 包围）写全：`template_version: v2`、`note_type`（取 metadata.json 顶层 `suggested_note_type`，技术密度高的短片可覆盖为 lecture）、`platform`、`bvid`（抖音填 `video_id`）、`source`、`created`、`duration`（带引号的 `"mm:ss"`）；
-   - **三词标签标注行**：小节要点用 `- **核心必考|重点掌握|了解即可** 要点句` 格式（行尾 `[mm:ss]` 可选、默认不写），标签词严格用白名单三词（v2 不用 ★ 符号，禁止"必考/核心考点"等变体）；每讲至少 1 条核心必考，其数量占标注行总数 ≤1/3（lecture）；
-   - **概念卡片**：`### 概念名（标签词）` + 定义/出现（≥2 小节）/依赖/易混 四行；
-   - **自测题折叠答案**：每题末尾 `（对应：概念名）`，紧跟 `<details><summary>答案</summary>` 折叠块，答案以 `**答案：**` 开头、至多一行（证据锚点可选）；lecture 5~9 道（short 2~3 道）；
+4. 按 `references/note-template.md`（**v3 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。生成前必读该模板文件。v3 硬性要求：
+   - **frontmatter**（`---` 包围）写全（字段与 v2 一致）：`template_version: v3`、`note_type`（取 metadata.json 顶层 `suggested_note_type`，技术密度高的短片可覆盖为 lecture）、`platform`、`bvid`（抖音填 `video_id`）、`source`、`created`、`duration`（带引号的 `"mm:ss"`）；
+   - **标题区**：`# 课堂笔记 <序号>：<主题>`，引语块先 `> 核心主线：`（一句话串起全片知识主线）再 `> 课程来源：`，有代码仓库再加 `> 课程代码：`；目录条目 `- [N. 小节名](#锚点)` 不带时刻，末尾固定列出 本讲知识地图 / 概念卡片 / 自测题（复习用）/ 视频时间索引；
+   - **小节**：`## N. 小节名`（禁时刻后缀），以 `**核心思想：** <一句话>` 开头，每小节 ≥3 行实质内容；要点用普通列表 `- 要点句`、关键术语 `**加粗**`，**禁止三词标签前缀（核心必考/重点掌握/了解即可及任何变体）、禁止行内 `[mm:ss]`**；对比性内容优先用表格；
+   - **代码块**：真实语言 fence；来源标注可选——来自克隆仓库写 `# 来源：仓库 <子项目>/<文件路径>`（注释符随语言），按视频讲解组织的可写 `# 按视频讲解还原` 或不写；任何代码块内禁时刻；
+   - **概念卡片**：`### 概念名`（禁标签后缀）+ 定义/出现/依赖/易混 四行；`出现` 写 ≥2 个小节序号（如 `出现：2、5`），禁时刻；
+   - **自测题折叠答案**：每题末尾 `（对应：概念名）`（概念必须在概念卡片集合内：lecture 必须、short 可选），紧跟 `<details><summary>答案</summary>` 折叠块，答案以 `**答案：**` 开头、至多一行、禁时刻；lecture 4~7 道（short 2~3 道）；选题主打高频原理与面试易错点，禁 yes/no 题干；
    - **mermaid 知识地图**：` ```mermaid mindmap `，节点标签禁半角括号与引号、≤12 字（括号用全角）；
-   - **参考时间戳默认不做**（复习场景无需时间导航）：整个 NAV 区块省略；仅当用户明确要"可点击的时间戳导航"时，才文末留 `<!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->` 与 `<!-- NAV:END -->` 占位（内容交给下一步脚本填充）；
-   - 用到的时间戳（可选装饰）必须取自转写稿真实存在的时间行（允许 ±5s 内小幅前移，禁止虚构）。
+   - **视频时间索引**：文末最后一节，`<details>` 折叠包裹 NAV 标记对；模型只写条目 `- [mm:ss] <与正文一级小节同名>`（一级章节一条，不做逐要点条目），**不写 URL**；时刻必须取自转写稿真实时间行（允许 ±5s 内小幅前移，禁止虚构）；lecture 必须有本节，short 可整体省略（省略时 NAV 标记也不留）。
 5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
-6. **填充参考时间戳（可选，默认跳过；仅当用户明确要时间导航且笔记留了 NAV 占位时执行）**：
+6. **填充时间索引深链（v3 笔记默认执行）**：
    `python "<skill安装目录>/scripts/note_nav.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
-   脚本幂等替换 NAV 标记之间的内容（B站生成 `?p=N&t=S` 深链，抖音纯文本）；标记缺失时追加到文件末尾。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
+   脚本幂等替换 NAV 标记之间的内容，把 `- [mm:ss] 标题` 条目填充为 `- [mm:ss](URL) 标题`（B站生成 `?p=N&t=S` 深链，抖音无深链保持纯文本）；`note_type=short` 跳过本步；笔记里 NAV 标记缺失时 warning 跳过。v2 老笔记仅在用户明确要时间导航时才执行本步。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
 7. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
-   errors 必须为 0 才交付；warnings 酌情处理（如补证据锚点、精简篇幅）。门禁按 frontmatter 的 `template_version` 分派规则（缺失视为 v1 走旧 ★ 规则）。**破坏性变更（v2 起）**：报告 JSON 的 `errors` / `warnings` 从字符串数组升级为**对象数组**（每项含 `check` 检查编号与 `line` 行号），调用方若按字符串解析需同步适配。
+   errors 必须为 0 才交付；warnings 酌情处理（如精简篇幅）。门禁按 frontmatter 的 `template_version` 分派 v3 / v2 / v1 规则（缺失视为 v1 走旧 ★ 规则；v3 下正文出现时刻、标签残留、时间索引缺失（lecture）、自测数量越界、答案或概念卡含时刻等均为 error）。**破坏性变更（v2 起）**：报告 JSON 的 `errors` / `warnings` 从字符串数组升级为**对象数组**（每项含 `check` 检查编号与 `line` 行号），调用方若按字符串解析需同步适配。
 8. **媒体清理（交付后必问用户）**：若输出目录存在缓存媒体（抖音的 `media_p01.mp4` 等本地视频，或残留的 `.part`/`.audio_*`/`.video_*` 临时文件），**询问用户「是否清理缓存的视频/音频文件？重新做笔记会重新下载」**：确认 → 先跑
    `python "<skill安装目录>/scripts/clean_media.py" "<输出目录>"`
    把将删除的清单给用户过目，再执行 `--apply` 实删；拒绝 → 跳过并说明缓存保留的意义（重跑截图/转写不再联网）。B站的临时音频/视频在流程中已自动删除，通常无残留。
 
 ## 笔记模板
 
-模板全文（完整骨架 + 三词标签定义 + 语法契约 + 证据锚点规范 + short 差异表 + 要点清单）见 **`references/note-template.md`**（**v2**），生成笔记前必读。骨架速览：
+模板全文（完整骨架 + 要点表达 + 语法契约 + 时间戳规范 + short 差异表 + 要点清单）见 **`references/note-template.md`**（**v3**），生成笔记前必读。骨架速览：
 
-```markdown
+````markdown
 ---
-template_version: v2
+template_version: v3
 note_type: lecture
-platform: bilibili            # 抖音为 douyin，bvid 字段填 video_id
-bvid: BV1xxxxxxxxx
+platform: bilibili            # bilibili | douyin
+bvid: BV1xxxxxxxxx            # 抖音则为 video_id
 source: https://www.bilibili.com/video/BV1xxxxxxxxx
 created: 2026-10-03
 duration: "42:10"
 ---
 
-# 课堂笔记 <序号>：<主题>
+# 课堂笔记 03：Spring 容器与 Bean 生命周期
 
-> 课程来源：<视频标题>（B站 <BV号> 或 抖音 <视频ID>，UP主/作者：<名字>，共N个小节约M分钟）
+> 核心主线：从“为什么需要容器”出发，沿控制反转 → 依赖注入 → BeanFactory → ApplicationContext 的脉络，理解 Spring 如何接管对象的一生。
+> 课程来源：<视频标题>（B站 BV1xxxxxxxxx，UP主：<名字>，共 17 个小节约 42 分钟）
 > 课程代码：<简介中的仓库地址，如有>
 
 ## 目录
 
-- <按分P或知识点列出>
+- [1. Spring 三大特性](#1-spring-三大特性)
+- [2. BeanFactory 与 ApplicationContext](#2-beanfactory-与-applicationcontext)
+- [本讲知识地图](#本讲知识地图)
+- [概念卡片](#概念卡片)
+- [自测题（复习用）](#自测题复习用)
+- [视频时间索引](#视频时间索引)
 
 ---
 
-## <分P/小节名>（时长）
+## 1. Spring 三大特性
 
-**核心思想：**<一句话>
+**核心思想：** 控制反转与依赖注入是同一件事的两种说法。
 
-- **核心必考** 要点句 [mm:ss]
-- **重点掌握** 要点句 [mm:ss]
-- **了解即可** 要点句
+- **控制反转**把对象的创建权交给容器，**依赖注入**是它的实现手段
+- 对象不再自己 `new` 依赖，而是由容器在装配阶段注入，耦合从编译期移到配置期
+- 三大特性中真正改变编码习惯的是控制反转，其余特性服务于它的落地
 
-<真实代码示例（注明来源：分P/时刻 或 仓库文件）……>
-<概念对比表格……>
+```java
+// 来源：仓库 spring-demo/src/main/java/demo/OrderService.java
+@Service
+public class OrderService {
+    private final PaymentGateway gateway;
+
+    public OrderService(PaymentGateway gateway) {  // 构造器注入
+        this.gateway = gateway;
+    }
+}
+```
+
+![Spring 三大特性](images/p01_three-features.png)
+
+---
+
+## 2. BeanFactory 与 ApplicationContext
+
+**核心思想：** 两者是同一继承体系的不同完成度。
+
+- 两者都实现 **BeanFactory** 接口，**ApplicationContext** 是它的超集
+- BeanFactory 惰性实例化，ApplicationContext 默认**预实例化全部单例**
+- 需要启动即失败（fail-fast）的场景选 ApplicationContext，配置错误在启动阶段暴露
+
+| 对比项 | BeanFactory | ApplicationContext |
+|---|---|---|
+| 实例化时机 | 惰性（首次 getBean 时） | 启动时预实例化单例 |
+| 定位 | 基础容器 | 完整容器（事件、国际化、AOP 集成） |
 
 ---
 
@@ -159,45 +192,78 @@ duration: "42:10"
 
 ```mermaid
 mindmap
-  root((<主题>))
-    小节1
-      概念A
+  root((Spring 容器))
+    三大特性
+      控制反转
+      依赖注入
+    容器实现
+      BeanFactory
+      ApplicationContext
 ```
 
 ## 概念卡片
 
-### <概念名>（核心必考）
+### 控制反转
 
-- 定义：<一句话>
-- 出现：<小节序号>（[mm:ss]）、<小节序号>（[mm:ss]）
-- 依赖：<概念名>
-- 易混：<概念名>——<一句话区别>
+- 定义：把对象创建与依赖装配的控制权从代码转移到容器
+- 出现：1、2
+- 依赖：
+- 易混：依赖注入——前者是设计原则，后者是落地手段
+
+### ApplicationContext
+
+- 定义：BeanFactory 的完整实现，启动即预实例化全部单例
+- 出现：1、2
+- 依赖：BeanFactory
+- 易混：BeanFactory——预实例化 vs 惰性加载
 
 ## 自测题（复习用）
 
-1. <题干>？（对应：<概念名>）
+1. 在需要启动即失败（fail-fast）的场景下，为什么选 ApplicationContext 而不是 BeanFactory？（对应：ApplicationContext）
 <details><summary>答案</summary>
 
-**答案：** <答案正文，至多一行> [mm:ss]
+**答案：** ApplicationContext 在启动时预实例化全部单例，配置错误会在启动阶段暴露；BeanFactory 惰性加载，错误推迟到首次获取时。
 
 </details>
 
-<!-- 参考时间戳默认不做；用户要时间导航时才留以下占位 -->
+2. 解释控制反转与依赖注入的关系，并说明为什么说它们是同一件事的两种说法。（对应：控制反转）
+<details><summary>答案</summary>
+
+**答案：** 控制反转是设计原则（把控制权交给容器），依赖注入是它的实现手段（构造器/字段/Setter 注入）。
+
+</details>
+
+3. …（lecture 共 4~7 道）
+
+---
+
 <!-- NAV:BEGIN 由 scripts/note_nav.py 生成，请勿手工编辑 -->
-## 参考时间戳
+## 视频时间索引
 
-- [mm:ss](<深链由脚本生成>) <关键节点>
+<details>
+<summary>📺 需要回看原片时展开</summary>
+
+- [00:00] 1. Spring 三大特性
+- [08:12] 2. BeanFactory 与 ApplicationContext
+
+</details>
+
 <!-- NAV:END -->
-```
+````
 
-模板要点（三词语义、语法契约、证据锚点规范、short 型差异的完整定义以 `references/note-template.md` 为准）：
+模板要点（要点表达、语法契约、时间戳规范、short 型差异的完整定义以 `references/note-template.md` 为准）：
 
-- 按视频小节顺序组织，每节可标注时长（可选），以 `**核心思想：**` 一句话开头；
-- 要点用 `- **核心必考|重点掌握|了解即可** 要点句` 三词标签标注（行尾时刻可选）
-  （核心必考=核心概念/必考点，重点掌握=重要机制/易混淆点，了解即可=补充了解）；
-- 概念卡片、自测题（折叠答案）、mermaid 知识地图按第五节语法契约写；
-- 参考时间戳默认不做（复习场景）；需要时留 NAV 标记占位，由 `note_nav.py` 填充；
-- 代码块用课程真实代码，注明来源（子项目 / 时刻 / 仓库文件）。
+- 正文按技术知识体系组织、阅读连贯：小节 `## N. 小节名`（禁时刻后缀），每节以
+  `**核心思想：**` 一句话开头、≥3 行实质内容；要点用普通列表 `- 要点句`（关键术语
+  加粗，禁三词标签前缀、禁行内 `[mm:ss]`），对比性内容优先用表格；
+- **全文时刻只出现在文末“视频时间索引”**（lecture 必有，`<details>` 折叠）：条目
+  `- [mm:ss] <与正文一级小节同名>`，时刻取自转写稿真实时间行（±5s 容差、禁止虚构），
+  模型不写 URL，深链由 `note_nav.py` 填充；
+- 概念卡片（`### 概念名` 无标签后缀，`出现` 只写小节序号）、自测题（折叠答案，
+  lecture 4~7 道 / short 2~3 道，`（对应：…）` 必须在概念卡片集合内）、mermaid
+  知识地图按第五节语法契约写；
+- 代码块用课程真实代码，来源标注可选（`# 来源：仓库 <子项目>/<文件路径>` 或
+  `# 按视频讲解还原`），任何代码块内禁时刻。
 
 ## 常见问题
 
