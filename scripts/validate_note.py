@@ -14,6 +14,13 @@
     报告格式差异（§4.5 破坏性变更，仅 v2）：v2 的 errors/warnings 是
     {"check","message","line"} 对象数组；v1 保持旧的字符串数组不变。
 
+    v3（2026-10-04，复习资料定位）：正文（目录/标题/要点/代码注释/概念卡/答案）
+    全面禁止时间戳；时刻只允许出现在文末「## 视频时间索引」的 NAV 折叠区
+    （一级章节粒度条目，深链由 scripts/note_nav.py 填充）；废除 核心必考/
+    重点掌握/了解即可 三词标签体系。检查项 V3-E1~E7 + 保留检查（V3-FM/V3-NT/
+    V3-SEC/V3-IDEA/V3-KM/V3-IMG/V3-MANIFEST/V3-RATIO），见 check_note_v3；
+    报告结构与 v2 相同（errors/warnings 对象数组、summary 字段、CLI 参数不变）。
+
 v1 检查项（errors 必须为 0 才通过；warnings 只提示）:
     1. 每个二级小节（##）都有实质内容：除"目录/参考时间戳"外，正文至少 3 行非空文本  [error]
     2. 存在"知识地图"章节且非空                                                    [error]
@@ -533,7 +540,7 @@ def parse_quiz_questions(lines: list[str], start: int, end: int) -> list[dict]:
             q = {"no": len(questions) + 1, "line": i + 1,
                  "stem": re.sub(r"^\s*\d{1,2}\s*[.、．)）]\s*", "", line).strip(),
                  "has_details": False, "has_answer": False, "extra_lines": 0,
-                 "answer_anchor": False, "correspond": None}
+                 "answer_anchor": False, "correspond": None, "answer_raw": []}
             cm = V2_CORRESPOND_RE.search(line)
             if cm:
                 q["correspond"] = cm.group(1).strip()
@@ -550,10 +557,12 @@ def parse_quiz_questions(lines: list[str], start: int, end: int) -> list[dict]:
             if V2_ANSWER_RE.match(line):
                 q["has_answer"] = True
                 q["answer_anchor"] = bool(V2_ANCHOR_RE.search(line))
+                q["answer_raw"].append(line)   # v3：答案行全文（全角时刻复查用）
             elif V2_DETAILS_CLOSE_RE.search(line):
                 in_details = False
             elif q["has_answer"] and line.strip():
                 q["extra_lines"] += 1
+                q["answer_raw"].append(line)
                 if V2_ANCHOR_RE.search(line):
                     q["answer_anchor"] = True
     return questions
@@ -1095,15 +1104,613 @@ def check_note_v2(text: str, note_path: Path, meta_path: Path | None,
             "errors": errors, "warnings": warnings, "checks": checks}
 
 
+# ==================== v3 门禁（模板 v3：复习资料定位，正文全面禁时刻） ====================
+# v3 定位（2026-10-04）：笔记是"看完课替代手写笔记"的复习资料——
+#   * 正文（目录/标题/要点/代码注释/概念卡/答案）全面禁止时间戳（V3-E1，代码块
+#     内同样扫描）；时刻只允许出现在文末「## 视频时间索引」的 NAV 折叠区（一级
+#     章节粒度条目，深链由 scripts/note_nav.py 机械填充）；
+#   * 废除 核心必考/重点掌握/了解即可 三词标签体系（V3-E4 检测残留），随之不再
+#     执行 v2 的标签白名单/每讲必含核心必考/覆盖率/占比≤1/3 与行内锚点白名单
+#     （±5s 白名单只用于 NAV 条目时刻）。
+# 分派：check_note_dispatch 按 frontmatter template_version 路由（v3 → 本节）；
+# rules_for 保持 v2 时代语义不变（冻结测试钉死），v3 判断在 dispatch 内单独做。
+# 报告与 v2 同构：errors/warnings 为 {"check","message","line"} 对象数组。
+#
+# 检查项一览（id → 语义 → 级别）:
+#   V3-E1  正文时刻禁令（frontmatter/NAV 区豁免，代码块内同样扫描）          [error]
+#   V3-E2  时间索引存在性（lecture 必备：章节+配对 NAV 标记+≥1 条目）；
+#          条目时刻须在转写稿白名单内 [error]；条目标题与正文一级 ## 小节名
+#          不一致（双方去行首序号前缀后比较）[warning]；缺 --txt-dir 跳过
+#          白名单校验 [warning]
+#   V3-E3  深链格式 + t=分P内相对秒 [error]；B站 lecture 条目缺链接、缺
+#          --txt-dir 无法校验 t [warning]
+#   V3-E4  三词标签残留（行首前缀 **X**/（X）变体、概念卡标题标签后缀）      [error]
+#   V3-E5  自测题：数量 lecture 4~7 / short 2~3、答案行全角时刻、缺 details、
+#          缺「**答案：**」、（对应：X）未知（lecture）                     [error]
+#          答案超一行、yes/no 题干                                         [warning]
+#   V3-E6  概念卡：定义/出现缺失或为空、出现引用的小节序号不存在、出现含
+#          时刻（v3 收紧）                                                 [error]
+#          单节概念、依赖/易混引用不存在的概念名                           [warning]
+#   V3-E7  未闭合 fence；语言白名单代码块的来源注释含时刻（v3 来源可选，
+#          缺失不再 warning；mermaid/text/console/output/diff 不查来源）   [error]
+#   保留检查（与 v2 同语义，复用现有实现）：V3-FM frontmatter 完整性（v3 增加
+#   bvid/duration，抖音按 video_id）、V3-NT note_type 取值、V3-SEC 每小节 ≥3 行
+#   实质内容、V3-IDEA 正文小节以 **核心思想：** 开头、V3-KM 知识地图 mermaid
+#   （lecture；short 可省）、V3-IMG 引用图片存在 [error]；V3-MANIFEST manifest
+#   图注交叉校验（贴近度放宽：标注行已废除，时间项自动跳过）、V3-RATIO 字数比
+#   [warning]。
+
+V3_INDEX_HEADING = "视频时间索引"
+V3_LOCATE_TOLERANCE = 5   # 条目时刻归属分P的 ±5s 容差（与 note_nav.py 同口径）
+# V3-E1：时刻模式——[mm:ss] / [h:mm:ss]（分钟 1~3 位）与全/半角括号形式
+V3_TS_ANY_RE = re.compile(
+    r"\[\d{1,3}:\d{2}(?::\d{2})?\]"
+    r"|[（(]\d{1,3}:\d{2}(?::\d{2})?[）)]")
+# V3-E5：答案行专用复查（全角括号形式，防 E1 漏网）
+V3_TS_FULLWIDTH_RE = re.compile(r"（\d{1,3}:\d{2}(?::\d{2})?）")
+# V3-E2：时间索引条目「- [mm:ss] <标题>」；脚本填链后为「- [mm:ss](URL) <标题>」
+V3_NAV_ENTRY_RE = re.compile(
+    r"^\s*[-*]\s+\[(\d{1,3}):(\d{2})\](?:\(([^)\s]*)\))?\s+(\S.*?)\s*$")
+V3_TAG_WORDS = r"(?:核心必考|重点掌握|了解即可)"
+# V3-E4：行首标签前缀（**加粗** 与 全/半角括号 两种变体；列表符号后的空格可省，
+# 覆盖「-**核心必考**…」「-（重点掌握）…」等残留写法）
+V3_TAG_RESIDUE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*" + V3_TAG_WORDS + r"\*\*|[（(]" + V3_TAG_WORDS + r"[）)])")
+# V3-E4：概念卡标题的标签后缀「### 概念名（核心必考）」
+V3_CARD_TAGGED_TITLE_RE = re.compile(
+    r"^###\s+.+?[（(]" + V3_TAG_WORDS + r"[）)]\s*$")
+# V3-E6：v3 概念卡标题为纯概念名（不带标签后缀）
+V3_CARD_TITLE_RE = re.compile(r"^###\s+(\S.*?)\s*$")
+# 标题归一化：去行首序号前缀（「1. 」「2、」等），用于条目标题与 ## 小节名比较
+V3_LEADING_NUM_RE = re.compile(r"^\s*\d{1,2}\s*[.、．)）]\s*")
+# V3-SEC / V3-IDEA 跳过的结构性章节（子串匹配）
+V3_SEC_SKIP = ("目录", "参考时间戳", "视频时间索引")
+V3_IDEA_SKIP = V3_SEC_SKIP + ("知识地图", "概念卡片", "自测题")
+V3_QUIZ_RANGE = {"lecture": (4, 7), "short": (2, 3)}
+# V3-E3：B站深链（frontmatter 缺 bvid 时退化用宽松格式兜底）
+V3_BILI_LINK_RE = re.compile(r"^https://www\.bilibili\.com/video/\S+\?p=\d+&t=\d+$")
+V3_TXT_PAGE_RE = re.compile(r"^(\d{1,3})_")   # 转写稿文件名页码前缀 <页码>_*.txt
+
+
+def v3_exempt_lines(text: str, lines: list[str]) -> set[int]:
+    """V3-E1/E4 的豁免行号（0-based）：frontmatter 区 + NAV:BEGIN…NAV:END 区。
+
+    frontmatter 里有 duration: "mm:ss"、NAV 区里是时间索引条目——两处时刻均合法；
+    NAV 区内容由 note_nav.py 机械生成，也不做标签残留扫描。
+    """
+    exempt: set[int] = set()
+    m = FRONTMATTER_RE.match(text)
+    if m:
+        n = m.group(0).count("\n")
+        exempt.update(range(n if m.group(0).endswith("\n") else n + 1))
+    begins = [i for i, l in enumerate(lines) if V2_NAV_BEGIN_RE.search(l)]
+    ends = [i for i, l in enumerate(lines) if V2_NAV_END_RE.search(l)]
+    if begins and ends and begins[0] <= ends[0]:
+        exempt.update(range(begins[0], ends[0] + 1))
+    return exempt
+
+
+def v3_norm_title(title: str) -> str:
+    """条目/小节标题归一化：去掉行首序号前缀（如「1. 」「2、」）与首尾空白。"""
+    return V3_LEADING_NUM_RE.sub("", title).strip()
+
+
+def v3_page_index(txt_dir: Path) -> dict[int, list[int]]:
+    """{分P页码: [该分P内各时间行的总秒]}，来自 <页码>_<分P名>.txt。
+
+    与 scripts/note_nav.py 的 build_page_index 同口径：每个分P的转写稿时间
+    从 0 起（bili_transcribe 契约）。
+    """
+    idx: dict[int, list[int]] = {}
+    for f in sorted(Path(txt_dir).glob("*.txt")):
+        pm = V3_TXT_PAGE_RE.match(f.name)
+        if not pm:
+            continue
+        times: list[int] = []
+        for ln in f.read_text(encoding="utf-8").splitlines():
+            tm = re.match(r"\[(\d{1,3}):(\d{2})\]", ln)
+            if tm:
+                times.append(int(tm.group(1)) * 60 + int(tm.group(2)))
+        idx[int(pm.group(1))] = times
+    return idx
+
+
+def v3_locate_page(page_index: dict[int, list[int]], sec: int):
+    """±5s 把条目时刻归属到分P：按页码升序取首个命中（note_nav.locate_page 同口径）。
+
+    返回 (页码, 命中时间行在该分P内的相对秒)；找不到返回 None。转写稿各分P时间
+    从 0 起，命中行秒值即分P内相对秒（等价于 时刻总秒 − 该分P起始累计秒，
+    每分P起始累计秒为 0），深链 t 必须等于该值。
+    """
+    for page in sorted(page_index):
+        for t in page_index[page]:
+            if abs(t - sec) <= V3_LOCATE_TOLERANCE:
+                return page, t
+    return None
+
+
+def parse_concept_cards_v3(lines: list[str], start: int, end: int,
+                           fence_state: list[bool]) -> list[dict]:
+    """解析 [start,end) 内的 v3 概念卡：### 概念名（无标签后缀）+ 定义/出现/依赖/易混。"""
+    cards: list[dict] = []
+    cur: dict | None = None
+    for i in range(start, end):
+        if fence_state[i]:
+            continue
+        line = lines[i]
+        tm = V3_CARD_TITLE_RE.match(line)
+        if tm:
+            cur = {"name": tm.group(1).strip(), "line": i + 1, "fields": {}}
+            cards.append(cur)
+            continue
+        fmm = V2_CARD_FIELD_RE.match(line)
+        if fmm and cur is not None and fmm.group(1) not in cur["fields"]:
+            cur["fields"][fmm.group(1)] = (fmm.group(2).strip(), i + 1)
+    return cards
+
+
+def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
+                  txt_dir: Path | None) -> dict:
+    """v3 门禁：正文全面禁时刻（V3-E1），时间戳只进文末时间索引 NAV 区（E2/E3）。
+
+    新规则 V3-E1~E7 + 保留检查（与 v2 同语义：frontmatter 完整性/小节实质内容/
+    核心思想开头/mermaid/图片与 manifest 交叉校验/字数比）；废除 v2 的三词标签
+    体系与行内锚点白名单。errors/warnings 为 {"check","message","line"} 对象数组。
+    """
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    checks: dict = {}
+
+    def err(cid, message, line=None):
+        errors.append({"check": str(cid), "message": message, "line": line})
+
+    def warn(cid, message, line=None):
+        warnings.append({"check": str(cid), "message": message, "line": line})
+
+    lines = text.splitlines()
+    fence_state = compute_fence_state(lines)
+    fm = parse_frontmatter(text)
+    note_type = (fm.get("note_type") or "").strip().lower()
+    platform = (fm.get("platform") or "").strip().lower()
+
+    # ---- V3-FM：frontmatter 完整性（v3 增加 duration；B站要 bvid，抖音按 video_id） ----
+    required = ["template_version", "note_type", "platform", "source",
+                "created", "duration"]
+    required.append("video_id" if platform == "douyin" else "bvid")
+    missing_fields = [f for f in required if not fm.get(f)]
+    for f in missing_fields:
+        err("V3-FM", f"frontmatter 缺少 {f} 字段")
+    checks["frontmatter_fields"] = {"passed": not missing_fields,
+                                    "missing": missing_fields}
+
+    # ---- V3-NT：note_type 取值 ----
+    if note_type and note_type not in ("lecture", "short"):
+        err("V3-NT", f"note_type「{note_type}」非法，只能是 lecture / short")
+    checks["note_type_valid"] = {"passed": note_type in ("lecture", "short"),
+                                 "note_type": note_type or None}
+
+    sections = split_sections(text)
+
+    # ---- V3-SEC：每个 ## 小节（除 目录/参考时间戳/视频时间索引）≥3 行实质内容 ----
+    sec_detail = {}
+    for title, body in sections:
+        if title is None or any(k in title for k in V3_SEC_SKIP):
+            continue
+        n = len(substantive_lines(body))
+        sec_detail[title] = n
+        if n < 3:
+            err("V3-SEC", f"小节「{title}」实质内容不足（{n} 行非空文本，需至少 3 行）")
+    checks["section_content"] = {"passed": not any(e["check"] == "V3-SEC" for e in errors),
+                                 "lines_per_section": sec_detail}
+
+    # ---- V3-IDEA：正文小节以 **核心思想：** 开头（知识地图/概念卡/自测题豁免） ----
+    idea_missing: list[str] = []
+    for title, body in sections:
+        if title is None or any(k in title for k in V3_IDEA_SKIP):
+            continue
+        subs = substantive_lines(body)
+        if not subs or not subs[0].startswith("**核心思想：**"):
+            idea_missing.append(title)
+            err("V3-IDEA", f"小节「{title}」未以「**核心思想：** <一句话>」开头")
+    checks["core_idea"] = {"passed": not idea_missing, "missing": idea_missing}
+
+    # ---- V3-E1：正文时刻禁令（frontmatter/NAV 区豁免；代码块内同样扫描） ----
+    exempt = v3_exempt_lines(text, lines)
+    e1_hits: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        if i in exempt:
+            continue
+        for tm in V3_TS_ANY_RE.finditer(line):
+            e1_hits.append((i + 1, tm.group(0)))
+            err("V3-E1", f"正文出现时刻「{tm.group(0)}」（第{i + 1}行）：v3 正文全面禁止"
+                         "时间戳，时刻只允许出现在文末「## 视频时间索引」的 NAV 折叠区",
+                i + 1)
+    checks["body_timestamp_ban"] = {"passed": not e1_hits, "hits": e1_hits}
+
+    # ---- V3-E4：三词标签残留（v3 已废除标签体系；跳过代码块与 NAV/frontmatter 区） ----
+    e4_lines: list[int] = []
+    for i, line in enumerate(lines):
+        if i in exempt or fence_state[i]:
+            continue
+        if V3_TAG_RESIDUE_RE.match(line):
+            e4_lines.append(i + 1)
+            err("V3-E4", f"第{i + 1}行残留三词标签前缀：{line.strip()[:40]}"
+                         "（v3 已废除 核心必考/重点掌握/了解即可 标签体系）", i + 1)
+        elif V3_CARD_TAGGED_TITLE_RE.match(line):
+            e4_lines.append(i + 1)
+            err("V3-E4", f"概念卡标题残留标签后缀（第{i + 1}行）：{line.strip()[:40]}"
+                         "（v3 概念卡标题为「### 概念名」，不带标签）", i + 1)
+    checks["tag_residue"] = {"passed": not e4_lines, "lines": e4_lines}
+
+    # ---- V3-E6：概念卡片（沿用 v2 字段语义；v3 收紧：出现含时刻 → error） ----
+    cards: list[dict] = []
+    card_names: set[str] = set()
+    card_head = find_h2_line(lines, "概念卡片")
+    if card_head is not None:
+        card_end = next_h2_after(lines, card_head + 1)
+        cards = parse_concept_cards_v3(lines, card_head + 1, card_end, fence_state)
+        card_names = {c["name"] for c in cards}
+    body_sec_nums: set[int] = set()
+    for line in lines:
+        hm = V2_H2_NUM_RE.match(line)
+        if hm:
+            body_sec_nums.add(int(hm.group(1)))
+    for c in cards:
+        defs = c["fields"].get("定义")
+        appear = c["fields"].get("出现")
+        if not defs or not defs[0]:
+            err("V3-E6", f"概念卡「{c['name']}」缺少非空「定义」字段", c["line"])
+        if not appear or not appear[0]:
+            err("V3-E6", f"概念卡「{c['name']}」缺少非空「出现」字段", c["line"])
+        else:
+            value, vline = appear
+            tm_ts = V3_TS_ANY_RE.search(value)
+            if tm_ts:
+                err("V3-E6", f"概念卡「{c['name']}」的「出现」含时刻「{tm_ts.group(0)}」："
+                             "v3 概念卡禁止时间戳，只写小节序号（如「出现：1、2」）", vline)
+            items = V2_APPEAR_ITEM_RE.findall(value)
+            if not items:
+                err("V3-E6", f"概念卡「{c['name']}」的「出现」格式非法"
+                             "（应为「小节序号、小节序号」，v3 不带时刻）", vline)
+            else:
+                secs_seen: list[int] = []
+                for sec, _ts in items:
+                    sec_i = int(sec)
+                    secs_seen.append(sec_i)
+                    if sec_i not in body_sec_nums:
+                        err("V3-E6", f"概念卡「{c['name']}」的「出现」引用小节 {sec}，"
+                                     "但笔记中不存在该小节序号", vline)
+                if len(set(secs_seen)) < 2:
+                    warn("V3-E6", f"概念卡「{c['name']}」的「出现」仅 "
+                                  f"{len(set(secs_seen))} 个小节：单节概念不必单独成卡，"
+                                  "考虑并入小节", vline)
+        dep = c["fields"].get("依赖")
+        if dep and dep[0]:
+            for name in re.split(r"[、,，;；]", dep[0]):
+                name = name.strip()
+                if name and name not in card_names:
+                    warn("V3-E6", f"概念卡「{c['name']}」的「依赖」引用「{name}」"
+                                  "不在概念卡片集合内", dep[1])
+        conf = c["fields"].get("易混")
+        if conf and conf[0]:
+            conf_name = re.split(r"——|--", conf[0])[0].strip()
+            if conf_name and conf_name not in card_names:
+                warn("V3-E6", f"概念卡「{c['name']}」的「易混」引用「{conf_name}」"
+                              "不在概念卡片集合内", conf[1])
+    checks["concept_cards"] = {"passed": not any(e["check"] == "V3-E6" for e in errors),
+                               "cards": len(cards)}
+
+    # ---- V3-E5：自测题（数量 4~7/2~3；沿用 v2 格式语义；答案行全角时刻复查） ----
+    quiz_head = find_h2_line(lines, "自测题")
+    questions: list[dict] = []
+    if quiz_head is None:
+        err("V3-E5", "缺少「自测题」章节")
+        checks["quiz_count"] = {"passed": False, "count": 0, "found": False}
+        checks["quiz_format"] = {"passed": False, "found": False}
+    else:
+        quiz_end = next_h2_after(lines, quiz_head + 1)
+        questions = parse_quiz_questions(lines, quiz_head + 1, quiz_end)
+        n_q = len(questions)
+        want = V3_QUIZ_RANGE.get(note_type, (4, 7))
+        if not want[0] <= n_q <= want[1]:
+            err("V3-E5", f"自测题数量为 {n_q}，要求 {want[0]}~{want[1]} 道"
+                         f"（note_type={note_type or '缺失'}）")
+        checks["quiz_count"] = {"passed": want[0] <= n_q <= want[1],
+                                "count": n_q, "found": True}
+        fmt_ok = True
+        for q in questions:
+            if not q["has_details"]:
+                fmt_ok = False
+                err("V3-E5", f"自测题 {q['no']} 缺少紧随其后的 <details> 折叠块", q["line"])
+            elif not q["has_answer"]:
+                fmt_ok = False
+                err("V3-E5", f"自测题 {q['no']} 的 <details> 内缺少「**答案：**」开头的行",
+                    q["line"])
+            else:
+                if q["extra_lines"] > 0:
+                    warn("V3-E5", f"自测题 {q['no']} 的答案正文超过一行"
+                                  f"（答案后另有 {q['extra_lines']} 行非空文本）："
+                                  "答案不应变成第二篇笔记", q["line"])
+                # 答案行全角括号时刻复查（E1 兜底，防漏网）
+                for ln in q["answer_raw"]:
+                    fm_ts = V3_TS_FULLWIDTH_RE.search(ln)
+                    if fm_ts:
+                        fmt_ok = False
+                        err("V3-E5", f"自测题 {q['no']} 的答案行含全角时刻"
+                                     f"「{fm_ts.group(0)}」：v3 答案禁止时间戳", q["line"])
+                        break
+            if V2_YESNO_RE.search(q["stem"]):
+                warn("V3-E5", f"自测题 {q['no']} 疑似 yes/no 题干「{q['stem'][:30]}」",
+                     q["line"])
+        # （对应：X）：lecture 必填且 X 须在概念卡集合内；short 可选（不检查）
+        if note_type == "lecture":
+            for q in questions:
+                if q["correspond"] is None:
+                    fmt_ok = False
+                    err("V3-E5", f"自测题 {q['no']} 缺少「（对应：概念名）」标记", q["line"])
+                elif q["correspond"] not in card_names:
+                    fmt_ok = False
+                    err("V3-E5", f"自测题 {q['no']} 的「（对应：{q['correspond']}）」"
+                                 "不存在于概念卡片集合，疑为笔误", q["line"])
+        checks["quiz_format"] = {"passed": fmt_ok, "count": n_q, "found": True}
+
+    # ---- 转写稿时间行池（V3-E2 条目白名单 + V3-RATIO 共用，±5s 按总秒数） ----
+    txt_files: list[Path] = sorted(Path(txt_dir).glob("*.txt")) if txt_dir else []
+    legal_sec: set[int] = set()
+    for f in txt_files:
+        for ln in f.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"\[(\d{1,3}):(\d{2})\]", ln)
+            if m:
+                legal_sec.add(int(m.group(1)) * 60 + int(m.group(2)))
+
+    # ---- V3-E2：视频时间索引（lecture 必备；short 可省、有则同规则校验） ----
+    nav_head = find_h2_line(lines, V3_INDEX_HEADING)
+    begins = [i for i, l in enumerate(lines) if V2_NAV_BEGIN_RE.search(l)]
+    ends = [i for i, l in enumerate(lines) if V2_NAV_END_RE.search(l)]
+    paired = len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0]
+    entries: list[dict] = []
+    if nav_head is not None:
+        if not paired:
+            err("V3-E2", "缺少配对的 NAV:BEGIN/NAV:END 生成区标记"
+                         "（应由 scripts/note_nav.py 生成）")
+        elif not (begins[0] <= nav_head <= ends[0]):
+            err("V3-E2", "「## 视频时间索引」未位于 NAV:BEGIN 与 NAV:END 标记之间")
+        idx_end = next_h2_after(lines, nav_head + 1)
+        for i in range(nav_head + 1, idx_end):
+            em = V3_NAV_ENTRY_RE.match(lines[i])
+            if em:
+                mm_, ss_ = int(em.group(1)), int(em.group(2))
+                entries.append({"line": i + 1, "sec": mm_ * 60 + ss_,
+                                "ts": f"{mm_:02d}:{ss_:02d}",
+                                "url": (em.group(3) or "").strip() or None,
+                                "title": em.group(4).strip()})
+        if not entries:
+            err("V3-E2", "「## 视频时间索引」没有条目（至少 1 条一级章节粒度条目，"
+                         "格式「- [mm:ss] <标题>」）")
+    elif note_type == "lecture":
+        err("V3-E2", "缺少「## 视频时间索引」章节（lecture 必须有，且位于 NAV 折叠区）")
+    checks["time_index"] = {"found": nav_head is not None, "nav_paired": paired,
+                            "entries": len(entries)}
+
+    # 条目时刻白名单（±5s 总秒数、可跨分钟；与 v2 检查6 同机制）
+    off_whitelist: list[str] = []
+    if not entries:
+        checks["entry_whitelist"] = {"passed": None, "note": "无条目，跳过"}
+    elif txt_dir is None:
+        warn("V3-E2", "未提供 --txt-dir，无法校验时间索引条目时刻白名单，跳过该子项"
+                      "（不静默通过：补齐参数后重跑）")
+        checks["entry_whitelist"] = {"passed": None, "note": "缺 --txt-dir，跳过"}
+    elif not legal_sec:
+        warn("V3-E2", f"转写稿目录 {txt_dir} 下没有可解析的 [mm:ss] 时间行，"
+                      "跳过条目白名单校验（不静默通过）")
+        checks["entry_whitelist"] = {"passed": None, "note": "txt 目录无时间行"}
+    else:
+        for e in entries:
+            if not any(abs(e["sec"] - ls) <= 5 for ls in legal_sec):
+                off_whitelist.append(e["ts"])
+                err("V3-E2", f"时间索引条目 [{e['ts']}]（第{e['line']}行）不在转写稿"
+                             "时间戳白名单内（±5s 容差，按总秒数比较、可跨分钟）",
+                    e["line"])
+        checks["entry_whitelist"] = {"passed": not off_whitelist,
+                                     "legal_seconds": len(legal_sec),
+                                     "off_whitelist": off_whitelist}
+
+    # 条目标题与正文一级 ## 小节名一致性（双方去行首序号前缀后须相等）[warning]
+    body_titles = {v3_norm_title(t) for t, _ in sections
+                   if t and not any(k in t for k in V3_SEC_SKIP)}
+    title_warns = 0
+    for e in entries:
+        if v3_norm_title(e["title"]) not in body_titles:
+            title_warns += 1
+            warn("V3-E2", f"时间索引条目标题「{e['title']}」（第{e['line']}行）与正文"
+                          "一级 ## 小节名不一致（比较方式：双方去掉行首序号前缀后须相等）",
+                e["line"])
+    checks["entry_titles"] = {"passed": title_warns == 0, "warnings": title_warns}
+
+    # ---- V3-E3：深链校验（格式 + t=分P内相对秒；B站 lecture 缺链 → warning） ----
+    link_errors = 0
+    missing_link_warns = 0
+    page_index: dict[int, list[int]] = {}
+    if txt_dir is not None and entries:
+        page_index = v3_page_index(txt_dir)
+    fm_bvid = (fm.get("bvid") or "").strip()
+    linked = [e for e in entries if e["url"]]
+    for e in linked:
+        if fm_bvid:
+            fmt_ok_link = re.fullmatch(
+                r"https://www\.bilibili\.com/video/" + re.escape(fm_bvid)
+                + r"\?p=\d+&t=\d+", e["url"]) is not None
+        else:
+            fmt_ok_link = V3_BILI_LINK_RE.fullmatch(e["url"]) is not None
+        e["fmt_ok"] = fmt_ok_link
+        if not fmt_ok_link:
+            link_errors += 1
+            err("V3-E3", f"时间索引条目深链格式非法（第{e['line']}行）：{e['url'][:60]}"
+                         "，必须为 https://www.bilibili.com/video/<bvid>?p=N&t=<非负整数>"
+                         "（由 scripts/note_nav.py 生成，勿手写）", e["line"])
+    if linked and not page_index:
+        warn("V3-E3", "未提供 --txt-dir（或转写稿不可解析），无法校验深链 t 是否等于"
+                      "分P内相对秒（不静默通过：补齐参数后重跑）")
+    else:
+        for e in linked:
+            if not e["fmt_ok"]:
+                continue
+            loc = v3_locate_page(page_index, e["sec"])
+            t_val = int(re.search(r"&t=(\d+)$", e["url"]).group(1))
+            if loc is not None and t_val != loc[1]:
+                link_errors += 1
+                err("V3-E3", f"深链 t={t_val} 与条目 [{e['ts']}] 归属分P（p={loc[0]}）"
+                             f"后的分P内相对秒 {loc[1]} 不一致（第{e['line']}行）："
+                             "请运行 scripts/note_nav.py 重新生成", e["line"])
+    for e in entries:
+        if (not e["url"] and note_type == "lecture" and platform == "bilibili"):
+            missing_link_warns += 1
+            warn("V3-E3", f"B站 lecture 时间索引条目 [{e['ts']}] 缺少深链"
+                          f"（第{e['line']}行）：请运行 python scripts/note_nav.py "
+                          "<笔记.md> --meta <metadata.json> --txt-dir <转写稿目录> 自动填充",
+                e["line"])
+    checks["deep_links"] = {"passed": link_errors == 0, "entries": len(entries),
+                            "missing_link_warns": missing_link_warns,
+                            "pages": sorted(page_index)}
+
+    # ---- V3-E7：代码块（白名单语言来源注释含时刻 → error；来源缺失不再 warning） ----
+    open_lang: str | None = None
+    open_idx = -1
+    unclosed = False
+    src_ts: list[tuple[int, str]] = []
+    i = 0
+    while i < len(lines):
+        m = V2_FENCE_LANG_RE.match(lines[i])
+        if m:
+            if open_lang is None:
+                open_lang, open_idx = m.group(1).lower(), i
+            else:
+                if open_lang in V2_CODE_LANGS:
+                    for j in list(range(open_idx + 1, i)) + list(range(i + 1, i + 3)):
+                        if "来源" in lines[j] and V3_TS_ANY_RE.search(lines[j]):
+                            src_ts.append((j + 1, lines[j].strip()[:40]))
+                open_lang = None
+        i += 1
+    if open_lang is not None:
+        unclosed = True
+    for j, snippet in src_ts:
+        err("V3-E7", f"来源标注含时刻（第{j}行）：{snippet}"
+                     "（v3 代码块来源可选，写仓库路径即可，不再要求时刻）", j)
+    if unclosed:
+        err("V3-E7", "存在未闭合的代码块（``` fence）")
+    checks["code_blocks"] = {"passed": not src_ts and not unclosed,
+                             "source_with_timestamp": [j for j, _ in src_ts],
+                             "unclosed_fence": unclosed,
+                             "note": "v3 来源标注可选（缺失不再 warning），含时刻才报错"}
+
+    # ---- V3-KM：lecture 必须有知识地图 + 合规 mermaid（short 可省） ----
+    if note_type == "lecture":
+        km_head = find_h2_line(lines, "知识地图")
+        if km_head is None:
+            err("V3-KM", "缺少「本讲知识地图」章节（lecture 必须有 mermaid 知识地图）")
+            checks["knowledge_map"] = {"passed": False, "found": False}
+        else:
+            km_end = next_h2_after(lines, km_head + 1)
+            blocks, problems = validate_mermaid_blocks(lines, km_head + 1, km_end)
+            if blocks == 0:
+                err("V3-KM", "「本讲知识地图」章节内没有 mermaid 代码块")
+            for p in problems:
+                err("V3-KM", f"知识地图 mermaid 块校验失败：{p}")
+            checks["knowledge_map"] = {"passed": blocks > 0 and not problems,
+                                       "mermaid_blocks": blocks,
+                                       "problems": problems}
+    else:
+        checks["knowledge_map"] = {"passed": None,
+                                   "note": "short 型知识地图可省（不检查）"}
+
+    # ---- V3-IMG：引用图片真实存在 ----
+    referenced: set[str] = set()
+    for m in IMG_MD_RE.finditer(text):
+        p = m.group(2)
+        if not re.match(r"^https?://", p):
+            referenced.add(p)
+    for m in IMG_BARE_RE.finditer(text):
+        referenced.add(m.group(0))
+    missing_imgs: list[str] = []
+    for p in sorted(referenced):
+        target = Path(p)
+        if not target.is_absolute():
+            target = note_path.parent / p
+        if not target.exists():
+            missing_imgs.append(p)
+    for p in missing_imgs:
+        err("V3-IMG", f"引用的图片不存在：{p}")
+    checks["images"] = {"passed": not missing_imgs, "checked": len(referenced),
+                        "missing": missing_imgs}
+
+    # ---- V3-MANIFEST：manifest 图注交叉校验（复用 check_image_manifest） ----
+    # v3 放宽：标注行已废除，不再要求图片贴近标注行（时间项因无锚定行自动跳过）；
+    # keyword 交叉校验保留。
+    manifest_path = note_path.parent / "images" / "manifest.json"
+    im14 = check_image_manifest(note_path, manifest_path)
+    for item in im14["mismatched"]:
+        warn("V3-MANIFEST", f"图注交叉校验：{item['file']} {item['reason']}")
+    checks["image_manifest_kw_time"] = {
+        "passed": not im14["mismatched"], "checked": im14["checked"],
+        "mismatched": [m["file"] for m in im14["mismatched"]],
+        "time_skipped": im14["time_skipped"], "note": im14["note"]}
+
+    # ---- --meta 读取（仅记录元信息，不影响检查） ----
+    meta_info: dict = {"loaded": False, "note": "未提供 --meta"}
+    if meta_path is not None:
+        try:
+            meta_raw = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+            meta_info = {"loaded": True,
+                         "platform": meta_raw.get("platform")
+                         if isinstance(meta_raw, dict) else None,
+                         "duration": meta_raw.get("duration")
+                         if isinstance(meta_raw, dict) else None}
+        except (OSError, ValueError):
+            meta_info = {"loaded": False,
+                         "note": f"--meta {meta_path} 读取/解析失败（仅记录，不影响检查）"}
+    checks["meta"] = meta_info
+
+    # ---- V3-RATIO：笔记字数/转写稿字数 ∈ [0.03, 1.2] [warning，沿用 v2 检查15] ----
+    if txt_dir is None:
+        warn("V3-RATIO", "未提供 --txt-dir，跳过字数比对")
+        checks["length_ratio"] = {"passed": None, "note": "缺 --txt-dir，跳过"}
+    else:
+        note_chars = len(re.sub(r"\s+", "", text))
+        txt_chars = sum(len(re.sub(r"\s+", "", f.read_text(encoding="utf-8")))
+                        for f in txt_files)
+        if txt_chars > 0:
+            ratio = note_chars / txt_chars
+            if not 0.03 <= ratio <= 1.2:
+                warn("V3-RATIO", f"笔记字数/转写稿字数比值为 {ratio:.4f}"
+                                 f"（超出 0.03~1.2）："
+                                 f"{'笔记过简' if ratio < 0.03 else '笔记可疑地长'}，"
+                                 f"note_chars={note_chars}, transcript_chars={txt_chars}")
+            checks["length_ratio"] = {"passed": 0.03 <= ratio <= 1.2,
+                                      "ratio": round(ratio, 4),
+                                      "note_chars": note_chars,
+                                      "transcript_chars": txt_chars}
+        else:
+            warn("V3-RATIO", f"转写稿目录 {txt_dir} 下没有 .txt 文件，跳过字数比对")
+            checks["length_ratio"] = {"passed": None, "note": "txt 目录为空"}
+
+    return {"ok": not errors, "template_version": "v3",
+            "note_type": note_type or None,
+            "errors": errors, "warnings": warnings, "checks": checks}
+
+
 def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = None,
                         txt_dir: Path | None = None) -> dict:
-    """§4.1 版本分派入口：按 frontmatter 的 template_version 选择 v1/v2 规则集。
+    """§4.1 版本分派入口：按 frontmatter 的 template_version 选择 v1/v2/v3 规则集。
 
-    v1：check_note（冻结，报告保持字符串数组），仅追加 template_version /
-    note_type 两个信息字段；v2：check_note_v2（对象数组报告）。
-    main 与测试共用本函数，保证"测试跑的就是 CLI 跑的"。
+    v3 → check_note_v3（对象数组报告，正文全面禁时刻）；v1：check_note（冻结，
+    报告保持字符串数组），仅追加 template_version / note_type 两个信息字段；
+    v2：check_note_v2（对象数组报告）。v3 的判断在此单独进行，rules_for 保持
+    v2 时代语义不变（冻结测试钉死）。main 与测试共用本函数，保证
+    "测试跑的就是 CLI 跑的"。
     """
     fm = parse_frontmatter(text)
+    if (fm.get("template_version") or "").strip().lower() == "v3":
+        return check_note_v3(text, note_path, meta_path, txt_dir)
     if rules_for(fm) == "v1":
         report = check_note(text, note_path, meta_path, txt_dir)
         report["template_version"] = "v1"
@@ -1130,10 +1737,11 @@ def print_json_report(report: dict, **kw) -> None:
 def main():
     _reconfigure_stdout()
     ap = argparse.ArgumentParser(
-        description="课堂笔记质量门禁（按 frontmatter template_version 分派 v1/v2 规则）")
+        description="课堂笔记质量门禁（按 frontmatter template_version 分派 v1/v2/v3 规则）")
     ap.add_argument("note", help="笔记 .md 路径")
     ap.add_argument("--meta", help="metadata.json 路径（与 --txt-dir 联用做字数比对）")
-    ap.add_argument("--txt-dir", help="转写稿 .txt 所在目录（v2 检查6/15 需要）")
+    ap.add_argument("--txt-dir", help="转写稿 .txt 所在目录"
+                                      "（v2 检查6/15 与 v3 时间索引校验需要）")
     args = ap.parse_args()
 
     note_path = Path(args.note)
