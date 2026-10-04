@@ -45,8 +45,9 @@ def load_sessdata() -> str:
         return ""
 
 
-LOGIN_DOC = """B站扫码登录：用 B站 App 扫描终端二维码，SESSDATA 自动写入 config.json。
-二维码过期会自动换新；180 秒未完成则超时。无 B站 App 时按 README「获取 SESSDATA」手动填写。"""
+LOGIN_DOC = """B站扫码登录：生成二维码 PNG 图片（路径打印在下方），用 B站 App 扫描，
+SESSDATA 自动写入 config.json。二维码过期会自动换新并覆盖同一路径；180 秒未完成则超时。
+无 B站 App 时按 README「获取 SESSDATA」手动填写。"""
 
 PASSPORT = "https://passport.bilibili.com"
 
@@ -78,26 +79,37 @@ def _poll_qrcode(qrcode_key: str) -> tuple[int, dict]:
 
 
 def _render_qr(url: str) -> str | None:
-    """终端 ASCII 渲染二维码；失败则落 PNG；再失败返回 None（引导手动路径）。"""
+    """生成登录二维码，返回展示方式（PNG 文件路径 / "ascii"），失败返回 None。
+
+    主路径是 PNG 图片文件而非终端 ASCII：ASCII 二维码经聊天工具/非等宽字体
+    转发极易错位变形，用户根本扫不出来（2026-10-04 实测案例）；图片文件让
+    Agent 能直接把路径递给用户打开扫码。优先写当前工作目录（Agent 好找），
+    不可写退回临时目录，再不行退回终端 ASCII，全失败返回 None。
+    """
     try:
         import qrcode
     except ImportError:
-        print("提示: 未安装 qrcode 库（pip install qrcode），无法终端渲染二维码", file=sys.stderr)
+        print("提示: 未安装 qrcode 库（pip install qrcode pillow），无法生成二维码",
+              file=sys.stderr)
         return None
-    try:
+    candidates = [Path.cwd() / "bilibili-login-qr.png"]
+    import tempfile
+    candidates.append(Path(tempfile.gettempdir()) / "bdn-login-qr.png")
+    for out in candidates:
+        try:
+            qrcode.make(url).save(out)  # PNG 需要 pillow
+            print(f"二维码图片: {out}（用B站App扫一扫；过期自动刷新后覆盖同一路径）",
+                  file=sys.stderr)
+            return str(out)
+        except Exception:
+            continue
+    try:  # 兜底：终端 ASCII 渲染（非等宽环境下可能变形）
         qr = qrcode.QRCode(border=1)
         qr.add_data(url)
         qr.print_ascii(invert=True)
         return "ascii"
     except Exception:
-        try:
-            import tempfile
-            path = Path(tempfile.gettempdir()) / "bdn-login-qr.png"
-            qrcode.make(url).save(path)
-            print(f"二维码图片已保存: {path}", file=sys.stderr)
-            return str(path)
-        except Exception:
-            return None
+        return None
 
 
 def _save_sessdata(sessdata: str) -> None:
@@ -132,7 +144,7 @@ def login() -> None:
     print(LOGIN_DOC, file=sys.stderr)
     key, url = _qrcode_generate()
     if not _render_qr(url):
-        raise SystemExit("二维码渲染失败：pip install qrcode 后重试，"
+        raise SystemExit("二维码渲染失败：pip install qrcode pillow 后重试，"
                          "或按 README「获取 SESSDATA」手动填写 config.json")
     state, deadline = "", time.time() + 180
     while time.time() < deadline:
@@ -148,9 +160,11 @@ def login() -> None:
                   file=sys.stderr)
             print_json_summary({"status": "ok", "action": "login", "user": who})
             return
-        if code == 86038:  # 二维码过期：自动换新，无需重跑
+        if code == 86038:  # 二维码过期：自动换新并重渲染（同一路径覆盖），无需重跑
             key, url = _qrcode_generate()
             print("二维码已过期，已自动刷新，请重新扫码", file=sys.stderr)
+            if not _render_qr(url):
+                print("警告: 刷新后的二维码渲染失败，建议重跑 --login", file=sys.stderr)
         elif code == 86090 and state != "scanned":
             state = "scanned"
             print("已扫码，请在手机上确认登录…", file=sys.stderr)

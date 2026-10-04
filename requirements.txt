@@ -3,7 +3,7 @@
 #   B站笔记流程（第1~3步）: faster-whisper ctranslate2 av numpy pillow
 #     （ctranslate2 为 faster-whisper 的推理后端，随其依赖树实际安装，此处显式声明）
 #   抖音流程（第1步）:      gmssl
-#   B站扫码登录:            qrcode（终端渲染登录二维码）
+#   B站扫码登录:            qrcode pillow（生成二维码 PNG 图片；ASCII 仅为兜底）
 #   截图画质初筛:           numpy pillow
 # 开发/测试依赖见 requirements-dev.txt
 faster-whisper

@@ -78,3 +78,27 @@ def test_transcribe_backend_gate_unchanged(tmp_path):
     import pytest
     with pytest.raises(NotImplementedError):
         bili_transcribe.transcribe(tmp_path / "x.m4a", "small", "zh", backend="whisper.cpp")
+
+
+# ---------- _render_qr：PNG 为主、ASCII 兜底（2026-10-04 修订） ----------
+
+def test_render_qr_png_primary(tmp_path, monkeypatch):
+    """主路径：PNG 写到当前工作目录，返回路径字符串（Agent 直接把路径给用户）。"""
+    monkeypatch.chdir(tmp_path)
+    out = bili_fetch._render_qr("https://bilibili.com/login?qr=test")
+    assert out is not None
+    assert out.endswith("bilibili-login-qr.png")
+    assert Path(out).exists() and Path(out).stat().st_size > 0
+
+
+def test_render_qr_falls_back_to_ascii_when_png_fails(tmp_path, monkeypatch):
+    """cwd 与临时目录都写不进 PNG 时退回终端 ASCII，不直接失败。"""
+    monkeypatch.chdir(tmp_path)
+    import qrcode
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(qrcode, "make", boom)
+    out = bili_fetch._render_qr("https://bilibili.com/login?qr=test")
+    assert out == "ascii"
