@@ -12,8 +12,11 @@
     <输出目录>/<页码>_<分P名>.txt  每个分P的字幕文本（有时间戳），无字幕则跳过
     stdout 最后一行输出 JSON 摘要（供调用方解析）
 
-字幕三态（每个分P的 subtitle_detail 字段）:
-    cc / ai       拿到字幕（subtitle=true）
+字幕状态（每个分P的 subtitle_detail 字段）:
+    cc / ai       拿到字幕（subtitle=true）；AI 字幕另做内容与标题的交叉校验
+    ai_mismatch   AI 字幕整体错位（返回了 ai 状态但内容是别的音频，实测案例
+                  BV1GKaG6zEtr 配的是无关电影对白）→ 不可信，存疑字幕另存
+                  *.ai字幕存疑.txt 备查，本分P按无字幕处理直接走 ASR 兜底
     api_empty     任一接口出现了字幕轨但全无可用 URL（/x/player/v2 对部分视频
                   只给元信息不给 URL 的已知问题，已自动尝试 wbi/v2 兜底）
                   → 提示用户填 SESSDATA 后重跑，仍失败再走 ASR
@@ -296,6 +299,34 @@ def safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip()[:60]
 
 
+AI_MISMATCH_SUFFIX = ".ai字幕存疑"
+
+
+def title_tokens(title: str) -> list[str]:
+    """提取标题里的 ASCII 词（≥2 字符），作为 AI 字幕交叉校验的锚点词。"""
+    return re.findall(r"[A-Za-z][A-Za-z0-9]{1,}", title)
+
+
+def subtitle_relevant(title: str, text: str) -> bool | None:
+    """AI 字幕内容与标题的交叉校验（防 AI 字幕整体错位）。
+
+    实测案例（2026-10，BV1GKaG6zEtr）：接口返回 ai 状态、内容却是完全不相关的
+    电影对白，AI 字幕整体错位时内容依然"通顺"，只有拿标题做锚点才能识破。
+
+    锚点只用标题里的 ASCII 词：技术词在 AI 字幕里几乎总按原样出现；中文词
+    （"为什么""教程"之类）太容易和无关对白撞车，做不得锚点。
+
+        标题无 ASCII 词 -> None（无从校验，信任字幕）
+        任一锚点词命中   -> True
+        全部未命中      -> False（判为错位，调用方应走 ASR 兜底）
+    """
+    tokens = title_tokens(title)
+    if not tokens:
+        return None
+    low = text.lower()
+    return any(t.lower() in low for t in tokens)
+
+
 def main():
     _reconfigure_stdout()
     argv = [a for a in sys.argv[1:] if a not in ("--probe", "--login")]
@@ -353,12 +384,21 @@ def main():
                 entry["subtitle_url"] = sub_url
                 text = subtitle_to_text(json.loads(http_get(sub_url, sessdata).decode("utf-8")))
                 if text.strip():
-                    fname = f"{page_no:02d}_{safe_name(part)}.txt"
-                    atomic_write_text(outdir / fname, text)
                     lan = sub.get("lan", "")
                     is_ai = bool(sub.get("ai_type")) or lan.startswith("ai")
-                    entry.update(subtitle=True, lan=lan, ai=is_ai,
-                                 subtitle_detail="ai" if is_ai else "cc", file=fname)
+                    if is_ai and subtitle_relevant(meta["title"], text) is False:
+                        # AI 字幕与标题交叉校验未命中：多半是字幕整体错位（配的是
+                        # 别的音频），内容看着"通顺"但不可信——存疑字幕另存备查，
+                        # 本分P按无字幕处理，转写脚本接手 ASR 兜底
+                        suspect = outdir / f"{page_no:02d}_{safe_name(part)}{AI_MISMATCH_SUFFIX}.txt"
+                        atomic_write_text(suspect, text)
+                        entry.update(subtitle=False, lan=lan, ai=True,
+                                     subtitle_detail="ai_mismatch", file=suspect.name)
+                    else:
+                        fname = f"{page_no:02d}_{safe_name(part)}.txt"
+                        atomic_write_text(outdir / fname, text)
+                        entry.update(subtitle=True, lan=lan, ai=is_ai,
+                                     subtitle_detail="ai" if is_ai else "cc", file=fname)
                 else:
                     entry["subtitle_detail"] = "api_empty"  # 字幕内容体为空
             else:
@@ -380,6 +420,11 @@ def main():
     atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
     # 字幕轨在但拿不到 URL：几乎总是登录态问题——给出可执行的下一步（--login 扫码）
+    if any(e.get("subtitle_detail") == "ai_mismatch" for e in report["pages"]):
+        report["hint_mismatch"] = ("有分P的 AI 字幕内容与标题交叉校验未命中（字幕可能整体错位，"
+                                   "如配成了别的音频），已按无字幕处理、将走语音识别兜底；"
+                                   f"存疑字幕另存 *{AI_MISMATCH_SUFFIX}.txt 备查")
+        print("提示: " + report["hint_mismatch"], file=sys.stderr)
     if any(e.get("subtitle_detail") == "api_empty" for e in report["pages"]):
         report["hint"] = ("有分P出现字幕轨但拿不到URL，通常需要登录态。"
                           "推荐：python scripts/bili_fetch.py --login 扫码登录后重跑；"
