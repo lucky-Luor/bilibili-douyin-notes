@@ -261,6 +261,78 @@
         "hits": 1,
         "source": "manual:2026-10-03",
         "disabled": false
+      },
+      "用力": {
+        "correct": "用例",
+        "hits": 3,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "用力图": {
+        "correct": "用例图",
+        "hits": 2,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "范文类": {
+        "correct": "范围内",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "症罩": {
+        "correct": "证照",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "政造": {
+        "correct": "证照",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "业务世界": {
+        "correct": "业务事件",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "赤酒花数据": {
+        "correct": "持久化数据",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "EVP原则": {
+        "correct": "EBP原则",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "EVP测试": {
+        "correct": "EBP测试",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "主操作人": {
+        "correct": "主参与者",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "组操作人": {
+        "correct": "主参与者",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "用户名义码": {
+        "correct": "用户名密码",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
       }
     },
     "美食": {},
@@ -354,6 +426,18 @@
         "correct": "skill",
         "hits": 0,
         "source": "seed:JavaEE课程ASR",
+        "disabled": false
+      },
+      "紧接线": {
+        "correct": "警戒线",
+        "hits": 1,
+        "source": "manual:2026-10-07",
+        "disabled": false
+      },
+      "售钱和售后": {
+        "correct": "售前和售后",
+        "hits": 1,
+        "source": "manual:2026-10-07",
         "disabled": false
       }
     }
