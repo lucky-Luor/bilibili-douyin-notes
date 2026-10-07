@@ -133,14 +133,20 @@ def build_page_index(txt_dir: Path) -> dict[int, list[int]]:
     return idx
 
 
-def locate_page(page_index: dict[int, list[int]], sec: int):
+def locate_page(page_index: dict[int, list[int]], sec: int,
+                only_page: int | None = None):
     """返回 (页码, 该分P内相对秒)；找不到归属分P返回 None。
 
     各分P时间戳均从 0 起，同一秒可能命中多个分P——按页码升序取首个，
     保证结果确定。v1/v2 与 v3 的深链 t 均取该分P内相对秒（U1 语义）。
     U1 待真机实测：B站 `?p=&t=` 相对秒语义，实测前与 BiliNote 实现保持一致。
+    only_page：指定笔记只覆盖单个分P时把定位限制在该分P内（每选集一份
+    笔记的场景；早分P的同秒时间行会抢先命中导致深链跳错选集）。
     """
-    for page in sorted(page_index):
+    pages = sorted(page_index)
+    if only_page is not None:
+        pages = [p for p in pages if p == only_page]
+    for page in pages:
         for t in page_index[page]:
             if abs(t - sec) <= ANCHOR_TOLERANCE:
                 return page, t
@@ -152,7 +158,8 @@ def fmt_ts(sec: int) -> str:
 
 
 def render_lines(entries: list[dict], platform: str, bvid: str,
-                 page_index: dict[int, list[int]]) -> tuple[list[str], int]:
+                 page_index: dict[int, list[int]],
+                 only_page: int | None = None) -> tuple[list[str], int]:
     """渲染导航行，按时间排序；返回 (行列表, 跳过数)。"""
     lines: list[str] = []
     skipped = 0
@@ -162,7 +169,7 @@ def render_lines(entries: list[dict], platform: str, bvid: str,
         if platform == "douyin":
             lines.append(f"- [{ts}] {text}")
             continue
-        loc = locate_page(page_index, e["sec"])
+        loc = locate_page(page_index, e["sec"], only_page)
         if loc is None:
             print(f"warning: 锚点 [{ts}]（{e['text'][:30]}）未找到归属分P，已跳过",
                   file=sys.stderr)
@@ -208,7 +215,7 @@ def atomic_write(path: Path, content: str):
 
 
 def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
-            bvid: str, note_type: str) -> int:
+            bvid: str, note_type: str, only_page: int | None = None) -> int:
     """v3 模式：为文末时间索引的无链接条目机械填链（标记对由模型写好，不追加）。
 
     标记缺失/条目区为空 → stderr warning、不改文件、正常退出 0（存在性由门禁管）；
@@ -254,7 +261,7 @@ def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
         if platform == "douyin":  # 抖音无深链语义：保持纯文本，属正常不告警
             continue
         mm, ss = ts_text.split(":")
-        loc = locate_page(page_index, int(mm) * 60 + int(ss))
+        loc = locate_page(page_index, int(mm) * 60 + int(ss), only_page)
         if loc is None:
             print(f"warning: v3 条目 [{ts_text}]（{title[:30]}）未找到归属分P，已跳过",
                   file=sys.stderr)
@@ -283,6 +290,9 @@ def main(argv=None) -> int:
     ap.add_argument("note", help="笔记 .md 路径")
     ap.add_argument("--meta", required=True, help="metadata.json 路径")
     ap.add_argument("--txt-dir", required=True, help="转写稿 .txt 所在目录")
+    ap.add_argument("--page", type=int, default=None,
+                    help="单分P笔记场景：限定深链只归属到该分P页码"
+                         "（每选集一份笔记时必填，否则早分P同秒时间行抢先命中）")
     args = ap.parse_args(argv)
 
     note_path = Path(args.note)
@@ -312,11 +322,13 @@ def main(argv=None) -> int:
         return 1
 
     if template_version == "v3":  # v3：条目已由模型写好，仅按分P归属机械填链
-        return main_v3(note_path, text, txt_dir, platform, bvid, note_type)
+        return main_v3(note_path, text, txt_dir, platform, bvid, note_type,
+                       only_page=args.page)
 
     entries = collect_entries(text)
     page_index = build_page_index(txt_dir) if platform != "douyin" else {}
-    nav_lines, skipped = render_lines(entries, platform, bvid, page_index)
+    nav_lines, skipped = render_lines(entries, platform, bvid, page_index,
+                                      only_page=args.page)
     try:
         new_text, mode = splice(text, nav_lines)
     except ValueError as exc:

@@ -1233,14 +1233,20 @@ def v3_page_index(txt_dir: Path) -> dict[int, list[int]]:
     return idx
 
 
-def v3_locate_page(page_index: dict[int, list[int]], sec: int):
+def v3_locate_page(page_index: dict[int, list[int]], sec: int,
+                   only_page: int | None = None):
     """±5s 把条目时刻归属到分P：按页码升序取首个命中（note_nav.locate_page 同口径）。
 
     返回 (页码, 命中时间行在该分P内的相对秒)；找不到返回 None。转写稿各分P时间
     从 0 起，命中行秒值即分P内相对秒（等价于 时刻总秒 − 该分P起始累计秒，
     每分P起始累计秒为 0），深链 t 必须等于该值。
+    only_page：单分P笔记（每选集一份）场景把定位限制在该分P内，与 note_nav
+    的 --page 同口径；否则早分P的同秒时间行会抢先命中导致 t/p 校验错位。
     """
-    for page in sorted(page_index):
+    pages = sorted(page_index)
+    if only_page is not None:
+        pages = [p for p in pages if p == only_page]
+    for page in pages:
         for t in page_index[page]:
             if abs(t - sec) <= V3_LOCATE_TOLERANCE:
                 return page, t
@@ -1336,7 +1342,7 @@ def v3_mermaid_label_problems(lines: list[str]) -> list[tuple[int, str, str]]:
 
 
 def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
-                  txt_dir: Path | None) -> dict:
+                  txt_dir: Path | None, only_page: int | None = None) -> dict:
     """v3 门禁：正文全面禁时刻（V3-E1），时间戳只进文末时间索引 NAV 区（E2/E3）。
 
     新规则 V3-E1~E7 + 保留检查（与 v2 同语义：frontmatter 完整性/小节实质内容/
@@ -1641,7 +1647,7 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
         for e in linked:
             if not e["fmt_ok"]:
                 continue
-            loc = v3_locate_page(page_index, e["sec"])
+            loc = v3_locate_page(page_index, e["sec"], only_page)
             t_val = int(re.search(r"&t=(\d+)$", e["url"]).group(1))
             if loc is not None and t_val != loc[1]:
                 link_errors += 1
@@ -1793,7 +1799,8 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
 
 
 def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = None,
-                        txt_dir: Path | None = None) -> dict:
+                        txt_dir: Path | None = None,
+                        only_page: int | None = None) -> dict:
     """版本分派入口：按 frontmatter 的 template_version 选择 v1/v2/v3 规则集。
 
     v3 → check_note_v3（对象数组报告，正文全面禁时刻）；v1：check_note（冻结，
@@ -1804,7 +1811,7 @@ def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = Non
     """
     fm = parse_frontmatter(text)
     if (fm.get("template_version") or "").strip().lower() == "v3":
-        return check_note_v3(text, note_path, meta_path, txt_dir)
+        return check_note_v3(text, note_path, meta_path, txt_dir, only_page)
     if rules_for(fm) == "v1":
         report = check_note(text, note_path, meta_path, txt_dir)
         report["template_version"] = "v1"
@@ -1836,6 +1843,9 @@ def main():
     ap.add_argument("--meta", help="metadata.json 路径（与 --txt-dir 联用做字数比对）")
     ap.add_argument("--txt-dir", help="转写稿 .txt 所在目录"
                                       "（v2 检查6/15 与 v3 时间索引校验需要）")
+    ap.add_argument("--page", type=int, default=None,
+                    help="单分P笔记场景：限定时间索引定位到该分P页码"
+                         "（每选集一份笔记时必填，与 note_nav --page 同口径）")
     args = ap.parse_args()
 
     note_path = Path(args.note)
@@ -1850,7 +1860,8 @@ def main():
 
     # 版本分派：无 frontmatter / v1 → v1 冻结规则（报告保持字符串数组，
     # 仅追加 template_version/note_type 两个信息字段）；v2 → 新规则集（对象数组）。
-    report = check_note_dispatch(text, note_path, meta_path, txt_dir)
+    report = check_note_dispatch(text, note_path, meta_path, txt_dir,
+                                 only_page=args.page)
     print_json_report(report, indent=2)
     sys.exit(0 if report["ok"] else 1)
 
