@@ -12,7 +12,14 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-yellow.svg)]()
 [![Agent Skills](https://img.shields.io/badge/规范-Agent%20Skills%20(SKILL.md)-orange.svg)]()
 
+简体中文 | [English](README_EN.md)
+
 </div>
+
+> 💬 对 AI 说一句「帮我把这个视频做成课堂笔记：<B站/抖音链接>」，就能得到下面这样的笔记 👇
+> （完整示例：[李宏毅机器学习 · 局部最小值与鞍点](examples/课堂笔记-01-局部最小值与鞍点.md)）
+
+<p align="center"><img src="docs/images/note-preview.png" alt="课堂笔记效果预览" width="760"></p>
 
 ---
 
@@ -53,6 +60,15 @@
 │ 生成课堂笔记         │  （小节+要点加粗+代码+知识地图+概念卡片+自测题）
 └─────────────────────┘
 ```
+
+## ⚡ 快速开始
+
+```bash
+# 一行安装（Claude Code；其他 Agent 把路径换成对应的 skills 目录）
+git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.claude/skills/bilibili-douyin-notes && pip install -r ~/.claude/skills/bilibili-douyin-notes/requirements.txt
+```
+
+装好后直接对 AI 说：**「帮我把这个视频做成课堂笔记：https://www.bilibili.com/video/BVxxxx」**。详细安装与可选配置见下文。
 
 ## 📦 安装
 
@@ -170,6 +186,8 @@ python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.js
 │   ├── ensure_abogus.py   # abogus.py 缺失时从上游固定 commit 下载（SHA-256 校验）
 │   └── abogus.py          # 抖音 a_bogus 签名算法（GPLv3，按需下载，不入仓库）
 ├── tests/                 # 离线 pytest 测试（不联网、无需重依赖）
+├── examples/              # 示例笔记（真实视频生成，已通过质量门禁）
+├── docs/images/           # README 配图
 ├── references/
 │   ├── anchors.json       # 截图关键词锚点表（时刻由脚本按转写稿运行时推导）
 │   ├── asr-glossary.json  # ASR 技术术语校正表
@@ -178,6 +196,44 @@ python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.js
 ├── config.example.json    # 配置模板（SESSDATA）
 └── LICENSE                # MIT
 ```
+
+## ❓ 常见问题
+
+<details>
+<summary><b>需要什么环境？</b></summary>
+
+Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI Agent，如 Claude Code、Codex、ZCode。不需要 GPU，也不需要任何付费 API。
+</details>
+
+<details>
+<summary><b>一定要登录 B站吗？</b></summary>
+
+不用。不登录也能抓官方 CC 字幕，没有字幕时自动走本地语音识别。扫码登录（`python scripts/bili_fetch.py --login`）后可以拿到 B站 AI 字幕，多数视频能跳过语音识别，速度快很多。抖音完全不需要登录。
+</details>
+
+<details>
+<summary><b>语音识别太慢怎么办？</b></summary>
+
+在 `config.json` 里把 `asr_model` 调小（如 `small` / `base`），或在有 NVIDIA 显卡时设置 `asr_device: "cuda"`。也可以先只转写一个分P（`--page 1`）估算耗时。
+</details>
+
+<details>
+<summary><b>术语识别错了（比如 IoC 被识别成别的词）？</b></summary>
+
+用 `scripts/apply_glossary.py` 做术语校正：先 dry-run 看报告，确认后 `--apply`。发现新的错法可以用 `--add "错法=正确词"` 补进词表，越用越准。
+</details>
+
+<details>
+<summary><b>抖音链接报 403？</b></summary>
+
+通常是平台更新了签名算法，参见下方「已知限制」里关于 `abogus.py` 的说明，或提一个 [Issue](https://github.com/lucky-Luor/bilibili-douyin-notes/issues) 告诉我。
+</details>
+
+<details>
+<summary><b>生成的笔记长什么样？</b></summary>
+
+看 [examples/](examples/) 目录里的完整示例，包含小节要点、对比表格、知识地图、概念卡片、自测题和可跳转的视频时间索引。
+</details>
 
 ## ⚠️ 已知限制
 
@@ -215,6 +271,8 @@ SHA-256 校验与关键字校验（ghproxy 镜像仅作为传输通道，同样�
 
 <div align="center">
 
-如果这个 skill 对你有帮助，欢迎点个 ⭐
+**如果这个 skill 帮你省下了记笔记的时间，欢迎点个 ⭐ Star 支持一下！**
+
+用它生成了满意的笔记？欢迎在 [Issues](https://github.com/lucky-Luor/bilibili-douyin-notes/issues) 晒出来，遇到问题或有新想法也欢迎反馈 🙌
 
 </div>
