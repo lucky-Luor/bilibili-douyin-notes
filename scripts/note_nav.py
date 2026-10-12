@@ -29,7 +29,7 @@ v3 = 视频时间索引条目原位填链；v1/v2 = 参考时间戳块生成（�
     - 两种模式同口径：B站深链 t 均为分P内相对秒而非全片累计秒（U1 语义，
       见 locate_page）；YouTube（platform=youtube，单分P）生成
       https://www.youtube.com/watch?v=<video_id>&t=<秒>s；
-      抖音（metadata platform=douyin）输出纯文本行、无链接；
+      抖音 / 小红书（platform=douyin / xiaohongshu）输出纯文本行、无链接；
       frontmatter note_type=short 时跳过（short 笔记的时间导航可省）。
 
 输出: stdout 一行 JSON 摘要（ensure_ascii=True）：
@@ -155,6 +155,10 @@ def locate_page(page_index: dict[int, list[int]], sec: int,
     return None
 
 
+# 无深链语义的平台：时间索引保持纯文本（网页端不支持按秒跳转）
+NO_LINK_PLATFORMS = ("douyin", "xiaohongshu")
+
+
 def deep_link(platform: str, vid: str, page: int, rel: float) -> str:
     """按平台生成深链：YouTube 为单分P的 watch?v=<id>&t=<秒>s，其余为 B站 ?p=N&t=S。"""
     if platform == "youtube":  # YouTube 没有分P概念，只带秒数
@@ -175,7 +179,7 @@ def render_lines(entries: list[dict], platform: str, bvid: str,
     for e in sorted(entries, key=lambda x: (x["sec"], x["order"])):
         ts = fmt_ts(e["sec"])
         text = f"{e['label']}：{e['text']}" if e["label"] else e["text"]
-        if platform == "douyin":
+        if platform in NO_LINK_PLATFORMS:  # 抖音 / 小红书无深链语义，输出纯文本
             lines.append(f"- [{ts}] {text}")
             continue
         loc = locate_page(page_index, e["sec"], only_page)
@@ -259,7 +263,7 @@ def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
                           "note_type": note_type or "lecture"},
                          ensure_ascii=True))
         return 0
-    page_index = build_page_index(txt_dir) if platform != "douyin" else {}
+    page_index = build_page_index(txt_dir) if platform not in NO_LINK_PLATFORMS else {}  # 无深链平台不建索引
     out = list(lines)
     written = skipped = 0
     for offset, line in enumerate(inner):
@@ -267,7 +271,7 @@ def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
         if not m:
             continue  # 已带链接 / 空行 / 其他内容：原样保留（幂等）
         ts_text, title = m.group("ts"), m.group("title")
-        if platform == "douyin":  # 抖音无深链语义：保持纯文本，属正常不告警
+        if platform in NO_LINK_PLATFORMS:  # 抖音 / 小红书无深链语义：保持纯文本，属正常不告警
             continue
         mm, ss = ts_text.split(":")
         loc = locate_page(page_index, int(mm) * 60 + int(ss), only_page)
@@ -324,7 +328,7 @@ def main(argv=None) -> int:
 
     platform = (meta.get("platform") or "bilibili").lower()
     bvid = meta.get("bvid") or meta.get("video_id") or ""
-    if platform != "douyin" and not bvid:
+    if platform not in NO_LINK_PLATFORMS and not bvid:  # 有深链语义的平台必须有视频 ID
         print(json.dumps({"status": "error",
                           "error": "metadata 缺少 bvid/video_id，无法生成深链"},
                          ensure_ascii=True))
@@ -335,7 +339,7 @@ def main(argv=None) -> int:
                        only_page=args.page)
 
     entries = collect_entries(text)
-    page_index = build_page_index(txt_dir) if platform != "douyin" else {}
+    page_index = build_page_index(txt_dir) if platform not in NO_LINK_PLATFORMS else {}  # 无深链平台不建索引
     nav_lines, skipped = render_lines(entries, platform, bvid, page_index,
                                       only_page=args.page)
     try:

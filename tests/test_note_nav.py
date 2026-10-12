@@ -382,3 +382,20 @@ def test_deep_link_helper():
             == "https://www.youtube.com/watch?v=aircAruvnKk&t=65s")  # YouTube 格式，秒数四舍五入
     assert (note_nav.deep_link("bilibili", "BV1xx411c7mD", 2, 22)
             == "https://www.bilibili.com/video/BV1xx411c7mD?p=2&t=22")  # B站格式不变
+
+
+# ---------- 小红书：与抖音一致，无深链保持纯文本 ----------
+
+XHS_META = {"platform": "xiaohongshu", "video_id": "6a963ece000000001203cfb4",  # 小红书元数据
+            "pages": [{"page": 1, "part": "视频", "duration": 1979}]}  # 单分P
+
+
+def test_v3_xiaohongshu_keeps_plain_text(tmp_path, capsys):
+    setup_files(tmp_path, note=V3_NOTE, meta=XHS_META)  # 复用 v3 笔记夹具
+    assert run(tmp_path) == 0  # 正常退出
+    captured = capsys.readouterr()  # 捕获输出
+    assert captured.err == ""  # 无深链属正常，不告警
+    block = read(tmp_path).split("<!-- NAV:BEGIN")[1]  # 取 NAV 区
+    assert "http" not in block  # 不生成任何链接
+    assert "- [00:05] 1. 开场与课程介绍" in block  # 条目保持纯文本
+    assert json.loads(captured.out.strip().splitlines()[-1])["platform"] == "xiaohongshu"  # 平台透传

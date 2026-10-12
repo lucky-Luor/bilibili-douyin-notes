@@ -927,3 +927,18 @@ def test_youtube_lecture_missing_link_warns(tmp_path):
             .replace("(https://www.youtube.com/watch?v=aircAruvnKk&t=492s)", ""))  # 去掉一条深链
     report = check_v3(tmp_path, text)  # 校验
     assert any("YouTube lecture" in w["message"] for w in warns_of(report, "V3-E3"))  # 缺链 warning
+
+
+# ==================== 小红书：frontmatter 用 video_id，时间索引无深链不告警 ====================
+
+def test_xiaohongshu_lecture_requires_video_id_and_no_link_warning(tmp_path):
+    text = (lecture_note()
+            .replace("platform: bilibili\nbvid: BV1xx411c7mD",
+                     "platform: xiaohongshu\nvideo_id: 6a963ece000000001203cfb4")  # 换平台
+            .replace("(https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=492)", "")  # 去掉深链
+            .replace("(https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=962)", ""))  # 去掉深链
+    report = check_v3(tmp_path, text)  # 校验
+    assert not errs_of(report, "V3-FM")  # video_id 满足要求
+    assert not any("缺少深链" in w["message"] for w in warns_of(report, "V3-E3"))  # 无深链平台不告警
+    missing = check_v3(tmp_path, text.replace("video_id: 6a963ece000000001203cfb4\n", ""))  # 去掉 video_id
+    assert any("video_id" in e["message"] for e in errs_of(missing, "V3-FM"))  # 报缺 video_id

@@ -2,13 +2,13 @@
 
 # bilibili-douyin-notes
 
-**把 B站 / 抖音视频一键整理成 Markdown 课堂笔记的 AI Agent Skill**
+**把 B站 / 抖音 / YouTube / 小红书视频一键整理成 Markdown 课堂笔记的 AI Agent Skill**
 
-字幕抓取 · 本地语音识别 · 重点截图 · 笔记模板 —— 免登录可用，扫码登录解锁 AI 字幕与更高画质
+四平台视频 · 字幕抓取 · 本地语音识别 · 重点截图 · 笔记模板 —— 免登录可用，不调任何付费 API
 
 [![CI](https://github.com/lucky-Luor/bilibili-douyin-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/lucky-Luor/bilibili-douyin-notes/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/平台-B站%20%7C%20抖音-green.svg)]()
+[![Platform](https://img.shields.io/badge/平台-B站%20%7C%20抖音%20%7C%20YouTube%20%7C%20小红书-green.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.10%2B-yellow.svg)]()
 [![Agent Skills](https://img.shields.io/badge/规范-Agent%20Skills%20(SKILL.md)-orange.svg)]()
 
@@ -16,7 +16,7 @@
 
 </div>
 
-> 💬 对 AI 说一句「帮我把这个视频做成课堂笔记：<B站/抖音链接>」，就能得到下面这样的笔记 👇
+> 💬 对 AI 说一句「帮我把这个视频做成课堂笔记：<B站/抖音/YouTube/小红书链接>」，就能得到下面这样的笔记 👇
 > （完整示例：[李宏毅机器学习 · 局部最小值与鞍点](examples/课堂笔记-01-局部最小值与鞍点.md)）
 
 <p align="center"><img src="docs/images/note-preview.png" alt="课堂笔记效果预览" width="760"></p>
@@ -25,22 +25,25 @@
 
 ## ✨ 功能特性
 
-- **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）、抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）与 YouTube（`youtube.com` / `youtu.be` / Shorts 链接，优先取官方/自动字幕）
+- **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）、抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）、YouTube（`youtube.com` / `youtu.be` / Shorts 链接，优先取官方/自动字幕）与小红书（`xiaohongshu.com` / `xhslink.com` 视频笔记分享链接）
 - **字幕优先**：自动抓取B站官方/AI字幕（可选登录），零成本秒出文稿
 - **ASR 兜底**：无字幕时用 faster-whisper 本地语音识别（CPU int8，国内走 hf-mirror 镜像），**不调任何付费 API**
 - **重点截图**：按转写稿时间戳锚点 + PyAV 抽帧，本地画质初筛自动**校验并标记**黑屏/空屏/模糊帧（像素占比法，白底 PPT 不误判），最终由 Agent 视觉复核决定取舍；无硬编码锚点时自动从文稿提取关键词
 - **抖音免登录**：游客身份（ttwid + a_bogus 签名）直接下载无水印视频，无需账号 Cookie
+- **小红书免登录**：解析分享页内嵌数据直接下载视频笔记，无签名、无需账号（仅支持视频笔记，不支持图文与评论）
 - **课堂笔记模板**：小节结构 + 关键术语加粗 + 真实代码引用 + 知识地图 + 概念卡片 + 自测题，文末附可回看跳转的视频时间索引
 
 ## 🧩 工作流程
 
 ```
-视频链接（B站/抖音）
+视频链接（B站/抖音/YouTube/小红书）
         │
         ▼
 ┌─────────────────────┐
 │ 第一步：抓取          │  B站：元数据 + 官方字幕（SESSDATA 可选）
 │ （按平台分流）        │  抖音：元数据 + 无水印视频下载（免登录）
+│                     │  YouTube：元数据 + 官方/自动字幕（无字幕下载音频）
+│                     │  小红书：元数据 + 视频下载（免登录）
 └─────────────────────┘
         │ 有字幕？──────否───┐
         ▼ 是                ▼
@@ -85,7 +88,7 @@ git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.claude/skil
 # 1. 克隆到你的 agent 的 skills 目录（以 ZCode 为例）
 git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.zcode/skills/bilibili-douyin-notes
 
-# 2. 安装 Python 依赖（按需：B站流程 / 抖音流程见 requirements.txt 内注释）
+# 2. 安装 Python 依赖（按需：各平台流程所需依赖见 requirements.txt 内注释）
 pip install -r requirements.txt
 
 # （可选）只装测试依赖：tests/ 离线可跑，无需 faster-whisper / av / gmssl（numpy / pillow 仍需安装）
@@ -125,7 +128,7 @@ python scripts/bili_fetch.py --login   # 生成二维码 PNG 图片并打印路�
 获取方式（推荐）：`python scripts/bili_fetch.py --login`，生成二维码 PNG 图片并打印路径，B站 App 扫码即登录，
 SESSDATA 自动写入 config.json；二维码过期自动换新。手动路径：浏览器登录 bilibili.com →
 F12 → Application → Cookies → 复制 `SESSDATA`。该文件已被 `.gitignore` 排除，不会被提交
-（含登录凭据，请勿分享）。抖音流程无需任何配置。
+（含登录凭据，请勿分享）。抖音、小红书流程无需任何配置；YouTube 被风控时可配 `youtube_proxy`，小红书可选配 `xhs_cookie`。
 
 ### 转写性能（可选配置）
 
@@ -141,6 +144,10 @@ CPU 转写慢时可在 config.json 调整：`asr_model`（tiny~large-v3，高阶
 > 帮我把这个视频做成课堂笔记：https://www.bilibili.com/video/BVxxxx
 >
 > 总结一下这个抖音视频：https://v.douyin.com/xxxx/
+>
+> 把这个 YouTube 视频整理成笔记：https://www.youtube.com/watch?v=xxxx
+>
+> 这个小红书视频做个笔记：<App 里「分享 → 复制链接」得到的整段文本>
 
 也可以直接手动调用脚本（详见 [SKILL.md](SKILL.md) 的工作流程章节）：
 
@@ -156,6 +163,9 @@ python scripts/douyin_fetch.py "<链接或分享口令>" "<输出目录>"
 
 # YouTube：抓取元数据与字幕（无字幕时加 --download 下载音频）
 python scripts/yt_fetch.py "<视频链接>" "<输出目录>"
+
+# 小红书：抓取元数据并下载视频（免登录，链接需带 xsec_token）
+python scripts/xhs_fetch.py "<分享链接或分享文本>" "<输出目录>"
 
 # 无字幕时：本地语音识别
 python scripts/bili_transcribe.py "<输出目录>/metadata.json"
@@ -181,7 +191,8 @@ python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.js
 │   ├── bili_fetch.py      # B站：元数据 + 字幕抓取（--probe 只探元数据）
 │   ├── douyin_fetch.py    # 抖音：元数据 + 无水印视频下载（游客身份）
 │   ├── yt_fetch.py        # YouTube：元数据 + 字幕三级回退（无字幕按需下载音频）
-│   ├── bili_transcribe.py # faster-whisper 本地 ASR 兜底（双平台兼容）
+│   ├── xhs_fetch.py       # 小红书：视频笔记元数据 + 视频下载（免登录）
+│   ├── bili_transcribe.py # faster-whisper 本地 ASR 兜底（多平台兼容）
 │   ├── bili_screenshot.py # 重点截图（锚点/自动关键词 + PyAV 抽帧 + 像素占比法 QC）
 │   ├── transcript_chunk.py# 长转写稿分块（map-reduce 前置）
 │   ├── apply_glossary.py  # ASR 术语校正（dry-run 报告 / --apply 落盘）
@@ -213,7 +224,7 @@ Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI
 <details>
 <summary><b>一定要登录 B站吗？</b></summary>
 
-不用。不登录也能抓官方 CC 字幕，没有字幕时自动走本地语音识别。扫码登录（`python scripts/bili_fetch.py --login`）后可以拿到 B站 AI 字幕，多数视频能跳过语音识别，速度快很多。抖音完全不需要登录。
+不用。不登录也能抓官方 CC 字幕，没有字幕时自动走本地语音识别。扫码登录（`python scripts/bili_fetch.py --login`）后可以拿到 B站 AI 字幕，多数视频能跳过语音识别，速度快很多。抖音、小红书完全不需要登录；YouTube 一般也不需要，遇到风控时再配 cookies / 代理。
 </details>
 
 <details>
@@ -235,6 +246,18 @@ Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI
 </details>
 
 <details>
+<summary><b>YouTube 提示 "Sign in to confirm you're not a bot"？</b></summary>
+
+YouTube 会拦截部分服务器 IP。给 `yt_fetch.py` 加 `--cookies-from-browser chrome`（或 `--cookies cookies.txt`），必要时加 `--proxy`；并保持 `yt-dlp` 为最新版、安装 deno。
+</details>
+
+<details>
+<summary><b>小红书链接打不开 / 提示 xsec_token？</b></summary>
+
+小红书必须用带 `xsec_token` 的完整分享链接（App 里「分享 → 复制链接」），只有笔记 ID 不行；token 有时效，过期就重新复制一次。只支持视频笔记，图文笔记会直接提示。
+</details>
+
+<details>
 <summary><b>生成的笔记长什么样？</b></summary>
 
 看 [examples/](examples/) 目录里的完整示例，包含小节要点、对比表格、知识地图、概念卡片、自测题和可跳转的视频时间索引。
@@ -246,6 +269,8 @@ Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI
 - ASR 转写的技术术语可能出错（如 IoC、Starter），生成笔记时建议结合上下文或代码仓库校正
 - 抖音依赖平台签名算法，平台升级时可能临时失效（表现为 detail 接口 403），需跟进上游项目更新签名实现
 - 抖音签名的 `abogus.py` 依赖上游仓库（BiliNote）托管：下载 URL 已固定到上游具体 commit 并做 SHA-256 校验；上游更新签名算法时，可用环境变量 `BILINOTE_ABOGUS_SHA=<新commit>` 临时指向新 revision，或按 `scripts/ensure_abogus.py` 文件头的手动安装步骤放置文件
+- YouTube 可能拦截服务器 / 云主机 IP，需要 cookies 或代理；`yt-dlp` 需随 YouTube 变化及时升级
+- 小红书依赖分享页内嵌数据结构，平台改版时可能临时失效；频繁请求会触发验证码（461/471），仅支持视频笔记
 - 仅支持公开可访问的视频
 
 ## 📄 许可证
@@ -271,7 +296,10 @@ SHA-256 校验与关键字校验（ghproxy 镜像仅作为传输通道，同样�
 
 - [JoeanAmier/TikTokDownloader](https://github.com/JoeanAmier/TikTokDownloader) —— `abogus.py` 原始作者
 - [Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API) —— 抖音 Web API 签名与 x-secsdk-web-signature 方案参考
-- [JefferyHcool/BiliNote](https://github.com/JefferyHcool/BiliNote) —— 多平台下载器架构参考
+- [JefferyHcool/BiliNote](https://github.com/JefferyHcool/BiliNote) —— 多平台下载器架构、YouTube 字幕优先策略参考
+- [jdepoix/youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) / [yt-dlp](https://github.com/yt-dlp/yt-dlp) —— YouTube 字幕与音频获取
+- [ReaJason/xhs](https://github.com/ReaJason/xhs) —— 小红书笔记页内嵌数据解析思路（MIT）
+- [JoeanAmier/XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) —— 小红书视频地址选择思路参考（仅参考思路，未使用其代码）
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) —— 本地语音识别引擎
 
 <div align="center">
