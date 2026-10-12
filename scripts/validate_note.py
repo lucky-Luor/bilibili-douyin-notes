@@ -1370,7 +1370,7 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
     # ---- V3-FM：frontmatter 完整性（v3 增加 duration；B站要 bvid，抖音按 video_id） ----
     required = ["template_version", "note_type", "platform", "source",
                 "created", "duration"]
-    required.append("video_id" if platform in ("douyin", "youtube") else "bvid")  # 抖音 / YouTube 用 video_id
+    required.append("video_id" if platform in ("douyin", "youtube", "xiaohongshu") else "bvid")  # 抖音 / YouTube / 小红书用 video_id
     missing_fields = [f for f in required if not fm.get(f)]
     for f in missing_fields:
         err("V3-FM", f"frontmatter 缺少 {f} 字段")
