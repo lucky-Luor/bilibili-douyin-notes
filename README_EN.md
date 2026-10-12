@@ -24,7 +24,7 @@ Subtitle fetching · Local speech recognition · Key-frame screenshots · Note t
 
 ## ✨ Features
 
-- **Two platforms**: Bilibili (`bilibili.com` / `b23.tv` short links / BV IDs) and Douyin (`douyin.com` / `v.douyin.com` / `iesdouyin.com` links / share text)
+- **Two platforms**: Bilibili (`bilibili.com` / `b23.tv` short links / BV IDs) , Douyin (`douyin.com` / `v.douyin.com` / `iesdouyin.com` links / share text) and YouTube (`youtube.com` / `youtu.be` / Shorts, official or auto captions first)
 - **Subtitles first**: fetches official / AI subtitles from Bilibili (login optional) — instant transcripts at zero cost
 - **Local ASR fallback**: when no subtitles exist, transcribes locally with faster-whisper (CPU int8; uses the hf-mirror inside mainland China). **No paid API calls**
 - **Key-frame screenshots**: anchored on transcript timestamps and extracted with PyAV; a local quality check flags black / blank / blurry frames (white-background slides are not misjudged), and the agent makes the final visual call
@@ -82,6 +82,7 @@ python scripts/bili_fetch.py --login
 | `faster-whisper` | ASR fallback | For videos without subtitles |
 | `av` (PyAV) | Audio decoding / frame extraction | Same as above |
 | `gmssl` | Douyin a_bogus signature (SM3) | Douyin links only |
+| `yt-dlp` / `youtube-transcript-api` | YouTube metadata, captions and audio (deno recommended) | YouTube links only |
 | `numpy` / `pillow` | Screenshot quality check | Screenshot step only |
 
 ## ⚙️ Configuration
@@ -104,6 +105,7 @@ Or run the scripts by hand (see [SKILL.md](SKILL.md) for details):
 python scripts/bili_fetch.py --probe "<url>"                 # metadata only
 python scripts/bili_fetch.py "<url>" "<outdir>"              # Bilibili: metadata + subtitles
 python scripts/douyin_fetch.py "<url or share text>" "<outdir>"  # Douyin: metadata + video
+python scripts/yt_fetch.py "<url>" "<outdir>"  # YouTube: metadata + captions (--download for audio)
 python scripts/bili_transcribe.py "<outdir>/metadata.json"  # local ASR when no subtitles
 python scripts/note_nav.py "<note.md>" --meta "<outdir>/metadata.json" --txt-dir "<outdir>"       # fill deep links
 python scripts/validate_note.py "<note.md>" --meta "<outdir>/metadata.json" --txt-dir "<outdir>"  # quality gate

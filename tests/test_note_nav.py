@@ -358,3 +358,27 @@ def test_v2_note_regression_unchanged_dispatch(tmp_path, capsys):
     assert "手写垃圾行" not in block
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert summary["mode"] == "replace"  # 非 v3 mode
+
+
+# ---------- YouTube：单分P，watch?v=<id>&t=<秒>s 深链 ----------
+
+YT_META = {"platform": "youtube", "video_id": "aircAruvnKk",  # YouTube 元数据（用 video_id）
+           "pages": [{"page": 1, "part": "视频", "duration": 1120}]}  # 单分P
+
+
+def test_v3_youtube_deep_link(tmp_path, capsys):
+    setup_files(tmp_path, note=V3_NOTE, meta=YT_META)  # 复用 v3 笔记夹具
+    assert run(tmp_path) == 0  # 正常退出
+    block = read(tmp_path).split("<!-- NAV:BEGIN")[1]  # 取 NAV 区
+    assert ("- [00:05](https://www.youtube.com/watch?v=aircAruvnKk&t=5s) 1. 开场与课程介绍"
+            in block)  # 生成 YouTube 深链
+    assert "bilibili.com" not in block  # 不残留 B站链接
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])  # 摘要
+    assert summary["platform"] == "youtube"  # 平台透传
+
+
+def test_deep_link_helper():
+    assert (note_nav.deep_link("youtube", "aircAruvnKk", 1, 65.4)
+            == "https://www.youtube.com/watch?v=aircAruvnKk&t=65s")  # YouTube 格式，秒数四舍五入
+    assert (note_nav.deep_link("bilibili", "BV1xx411c7mD", 2, 22)
+            == "https://www.bilibili.com/video/BV1xx411c7mD?p=2&t=22")  # B站格式不变

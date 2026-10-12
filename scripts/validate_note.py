@@ -1173,6 +1173,8 @@ V3_IDEA_SKIP = V3_SEC_SKIP + ("知识地图", "概念卡片", "自测题")
 V3_QUIZ_RANGE = {"lecture": (4, 7), "short": (2, 3)}
 # V3-E3：B站深链（frontmatter 缺 bvid 时退化用宽松格式兜底）
 V3_BILI_LINK_RE = re.compile(r"^https://www\.bilibili\.com/video/\S+\?p=\d+&t=\d+$")
+# V3-E3：YouTube 深链（单分P，t 带 s 后缀；frontmatter 缺 video_id 时用宽松格式兜底）
+V3_YT_LINK_RE = re.compile(r"^https://www\.youtube\.com/watch\?v=[A-Za-z0-9_-]{11}&t=\d+s$")
 V3_TXT_PAGE_RE = re.compile(r"^(\d{1,3})_")   # 转写稿文件名页码前缀 <页码>_*.txt
 # V3-KM-LABEL：节点标签折算宽度上限——全角字符记 1、半角记 0.5
 # （如 ApplicationContext 折算 9 字），避免纯英文技术名按原始字符数误报超长
@@ -1368,7 +1370,7 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
     # ---- V3-FM：frontmatter 完整性（v3 增加 duration；B站要 bvid，抖音按 video_id） ----
     required = ["template_version", "note_type", "platform", "source",
                 "created", "duration"]
-    required.append("video_id" if platform == "douyin" else "bvid")
+    required.append("video_id" if platform in ("douyin", "youtube") else "bvid")  # 抖音 / YouTube 用 video_id
     missing_fields = [f for f in required if not fm.get(f)]
     for f in missing_fields:
         err("V3-FM", f"frontmatter 缺少 {f} 字段")
@@ -1626,8 +1628,19 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
     if txt_dir is not None and entries:
         page_index = v3_page_index(txt_dir)
     fm_bvid = (fm.get("bvid") or "").strip()
+    fm_vid = (fm.get("video_id") or "").strip()  # YouTube 深链校验用的视频 ID
     linked = [e for e in entries if e["url"]]
     for e in linked:
+        if platform == "youtube":  # YouTube：watch?v=<video_id>&t=<秒>s
+            yt_re = (r"https://www\.youtube\.com/watch\?v=" + re.escape(fm_vid)  # 有 video_id 时严格匹配
+                     + r"&t=\d+s") if fm_vid else V3_YT_LINK_RE.pattern.strip("^$")  # 否则宽松兜底
+            e["fmt_ok"] = re.fullmatch(yt_re, e["url"]) is not None  # 格式判定
+            if not e["fmt_ok"]:  # 格式非法
+                link_errors += 1  # 计入错误
+                err("V3-E3", f"时间索引条目深链格式非法（第{e['line']}行）：{e['url'][:60]}"
+                             "，必须为 https://www.youtube.com/watch?v=<video_id>&t=<非负整数>s"
+                             "（由 scripts/note_nav.py 生成，勿手写）", e["line"])  # 报错
+            continue  # YouTube 不走 B站格式校验
         if fm_bvid:
             fmt_ok_link = re.fullmatch(
                 r"https://www\.bilibili\.com/video/" + re.escape(fm_bvid)
@@ -1648,16 +1661,16 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
             if not e["fmt_ok"]:
                 continue
             loc = v3_locate_page(page_index, e["sec"], only_page)
-            t_val = int(re.search(r"&t=(\d+)$", e["url"]).group(1))
+            t_val = int(re.search(r"&t=(\d+)s?$", e["url"]).group(1))  # 兼容 YouTube 的 s 后缀
             if loc is not None and t_val != loc[1]:
                 link_errors += 1
                 err("V3-E3", f"深链 t={t_val} 与条目 [{e['ts']}] 归属分P（p={loc[0]}）"
                              f"后的分P内相对秒 {loc[1]} 不一致（第{e['line']}行）："
                              "请运行 scripts/note_nav.py 重新生成", e["line"])
     for e in entries:
-        if (not e["url"] and note_type == "lecture" and platform == "bilibili"):
+        if (not e["url"] and note_type == "lecture" and platform in ("bilibili", "youtube")):  # 有深链语义的平台
             missing_link_warns += 1
-            warn("V3-E3", f"B站 lecture 时间索引条目 [{e['ts']}] 缺少深链"
+            warn("V3-E3", f"{'YouTube' if platform == 'youtube' else 'B站'} lecture 时间索引条目 [{e['ts']}] 缺少深链"
                           f"（第{e['line']}行）：请运行 python scripts/note_nav.py "
                           "<笔记.md> --meta <metadata.json> --txt-dir <转写稿目录> 自动填充",
                 e["line"])
