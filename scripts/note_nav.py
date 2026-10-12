@@ -27,7 +27,9 @@ v3 = 视频时间索引条目原位填链；v1/v2 = 参考时间戳块生成（�
       标记缺失 → 追加到文件末尾；标记不配对 → 报错退出且不改文件。
       写入用 .tmp → os.replace 原子替换。
     - 两种模式同口径：B站深链 t 均为分P内相对秒而非全片累计秒（U1 语义，
-      见 locate_page）；抖音（metadata platform=douyin）输出纯文本行、无链接；
+      见 locate_page）；YouTube（platform=youtube，单分P）生成
+      https://www.youtube.com/watch?v=<video_id>&t=<秒>s；
+      抖音（metadata platform=douyin）输出纯文本行、无链接；
       frontmatter note_type=short 时跳过（short 笔记的时间导航可省）。
 
 输出: stdout 一行 JSON 摘要（ensure_ascii=True）：
@@ -153,6 +155,13 @@ def locate_page(page_index: dict[int, list[int]], sec: int,
     return None
 
 
+def deep_link(platform: str, vid: str, page: int, rel: float) -> str:
+    """按平台生成深链：YouTube 为单分P的 watch?v=<id>&t=<秒>s，其余为 B站 ?p=N&t=S。"""
+    if platform == "youtube":  # YouTube 没有分P概念，只带秒数
+        return f"https://www.youtube.com/watch?v={vid}&t={int(round(rel))}s"  # t 参数带 s 后缀
+    return f"https://www.bilibili.com/video/{vid}?p={page}&t={int(round(rel))}"  # B站原有格式
+
+
 def fmt_ts(sec: int) -> str:
     return f"{sec // 60:02d}:{sec % 60:02d}"
 
@@ -176,7 +185,7 @@ def render_lines(entries: list[dict], platform: str, bvid: str,
             skipped += 1
             continue
         page, rel = loc
-        url = f"https://www.bilibili.com/video/{bvid}?p={page}&t={int(round(rel))}"
+        url = deep_link(platform, bvid, page, rel)  # 按平台生成深链（B站 / YouTube）
         lines.append(f"- [{ts}]({url}) {text}")
     return lines, skipped
 
@@ -268,7 +277,7 @@ def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
             skipped += 1
             continue
         page, rel = loc
-        url = f"https://www.bilibili.com/video/{bvid}?p={page}&t={int(round(rel))}"
+        url = deep_link(platform, bvid, page, rel)  # 按平台生成深链（B站 / YouTube）
         out[begins[0] + 1 + offset] = (
             f"{m.group('indent')}- [{ts_text}]({url}) {title}")
         written += 1

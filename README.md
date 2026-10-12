@@ -25,7 +25,7 @@
 
 ## ✨ 功能特性
 
-- **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）与抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）
+- **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）、抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）与 YouTube（`youtube.com` / `youtu.be` / Shorts 链接，优先取官方/自动字幕）
 - **字幕优先**：自动抓取B站官方/AI字幕（可选登录），零成本秒出文稿
 - **ASR 兜底**：无字幕时用 faster-whisper 本地语音识别（CPU int8，国内走 hf-mirror 镜像），**不调任何付费 API**
 - **重点截图**：按转写稿时间戳锚点 + PyAV 抽帧，本地画质初筛自动**校验并标记**黑屏/空屏/模糊帧（像素占比法，白底 PPT 不误判），最终由 Agent 视觉复核决定取舍；无硬编码锚点时自动从文稿提取关键词
@@ -107,6 +107,7 @@ python scripts/bili_fetch.py --login   # 生成二维码 PNG 图片并打印路�
 | `faster-whisper` | 语音识别兜底 | 做无字幕视频笔记时必需 |
 | `av`（PyAV） | 音频解码 / 视频抽帧 | 同上（faster-whisper 依赖链会带上） |
 | `gmssl` | 抖音 a_bogus 签名（SM3） | 仅抖音链接需要 |
+| `yt-dlp` / `youtube-transcript-api` | YouTube 元数据、字幕与音频（建议另装 deno） | 仅 YouTube 链接需要 |
 | `numpy` / `pillow` | 截图画质初筛（像素占比法 QC） | 仅截图流程需要 |
 
 </details>
@@ -153,6 +154,9 @@ python scripts/bili_fetch.py "<视频链接>" "<输出目录>"
 # 抖音：抓取元数据并下载无水印视频（免登录）
 python scripts/douyin_fetch.py "<链接或分享口令>" "<输出目录>"
 
+# YouTube：抓取元数据与字幕（无字幕时加 --download 下载音频）
+python scripts/yt_fetch.py "<视频链接>" "<输出目录>"
+
 # 无字幕时：本地语音识别
 python scripts/bili_transcribe.py "<输出目录>/metadata.json"
 
@@ -176,6 +180,7 @@ python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.js
 ├── scripts/
 │   ├── bili_fetch.py      # B站：元数据 + 字幕抓取（--probe 只探元数据）
 │   ├── douyin_fetch.py    # 抖音：元数据 + 无水印视频下载（游客身份）
+│   ├── yt_fetch.py        # YouTube：元数据 + 字幕三级回退（无字幕按需下载音频）
 │   ├── bili_transcribe.py # faster-whisper 本地 ASR 兜底（双平台兼容）
 │   ├── bili_screenshot.py # 重点截图（锚点/自动关键词 + PyAV 抽帧 + 像素占比法 QC）
 │   ├── transcript_chunk.py# 长转写稿分块（map-reduce 前置）

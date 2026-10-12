@@ -880,3 +880,50 @@ def test_km_label_v2_dispatch_not_checked(tmp_path):
     assert report["template_version"] == "v2"
     ids = {x["check"] for x in report["errors"] + report["warnings"]}
     assert "V3-KM-LABEL" not in ids
+
+
+# ==================== YouTube：frontmatter 用 video_id + watch?v=&t=Ns 深链 ====================
+
+def youtube_note() -> str:
+    """把 B站 lecture 合成笔记改写为 YouTube 版本（深链 t=<秒>s）。"""
+    return (lecture_note()
+            .replace("platform: bilibili\nbvid: BV1xx411c7mD",
+                     "platform: youtube\nvideo_id: aircAruvnKk")  # frontmatter 换平台
+            .replace("https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=492",
+                     "https://www.youtube.com/watch?v=aircAruvnKk&t=492s")  # 第一条深链
+            .replace("https://www.bilibili.com/video/BV1xx411c7mD?p=1&t=962",
+                     "https://www.youtube.com/watch?v=aircAruvnKk&t=962s"))  # 第二条深链
+
+
+def test_youtube_lecture_passes(tmp_path):
+    txt = make_txt_dir(tmp_path, ["00:00", "08:12", "08:45", "09:30",
+                                  "15:40", "16:02", "16:30", "17:10"])  # 含条目时刻的转写稿
+    report = check_v3(tmp_path, youtube_note(), txt)  # 校验
+    assert report["errors"] == []  # 无错误
+    assert not errs_of(report, "V3-FM")  # video_id 满足 frontmatter 要求
+    assert report["checks"]["deep_links"]["passed"] is True  # 深链格式与 t 值都通过
+
+
+def test_youtube_missing_video_id_errors(tmp_path):
+    text = youtube_note().replace("video_id: aircAruvnKk\n", "")  # 去掉 video_id
+    report = check_v3(tmp_path, text)  # 校验
+    assert any("video_id" in e["message"] for e in errs_of(report, "V3-FM"))  # 报缺 video_id
+
+
+def test_youtube_bad_link_and_wrong_t_errors(tmp_path):
+    txt = make_txt_dir(tmp_path, ["00:00", "08:12", "08:45", "09:30",
+                                  "15:40", "16:02", "16:30", "17:10"])  # 转写稿
+    text = (youtube_note()
+            .replace("&t=492s", "&t=492")  # 缺 s 后缀 → 格式非法
+            .replace("&t=962s", "&t=100s"))  # t 与条目时刻不一致
+    report = check_v3(tmp_path, text, txt)  # 校验
+    msgs = [e["message"] for e in errs_of(report, "V3-E3")]  # 深链相关错误
+    assert any("youtube.com/watch" in m for m in msgs)  # 格式错误提示 YouTube 格式
+    assert any("t=100" in m for m in msgs)  # t 值不一致被识别
+
+
+def test_youtube_lecture_missing_link_warns(tmp_path):
+    text = (youtube_note()
+            .replace("(https://www.youtube.com/watch?v=aircAruvnKk&t=492s)", ""))  # 去掉一条深链
+    report = check_v3(tmp_path, text)  # 校验
+    assert any("YouTube lecture" in w["message"] for w in warns_of(report, "V3-E3"))  # 缺链 warning

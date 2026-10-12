@@ -1,19 +1,20 @@
 ---
 name: bilibili-douyin-notes
-description: 把B站/抖音视频整理成Markdown课堂笔记。用户发来 bilibili.com、b23.tv、douyin.com 等视频链接（或分享口令）并要求做笔记、总结、转文字时使用。产出符合模板规范、经质量门禁校验的课堂笔记 .md 文件。
+description: 把B站/抖音/YouTube视频整理成Markdown课堂笔记。用户发来 bilibili.com、b23.tv、douyin.com、youtube.com、youtu.be 等视频链接（或分享口令）并要求做笔记、总结、转文字时使用。产出符合模板规范、经质量门禁校验的课堂笔记 .md 文件。
 ---
 
-# B站/抖音视频 → Markdown 课堂笔记
+# B站/抖音/YouTube视频 → Markdown 课堂笔记
 
 ## 触发条件
 
-用户消息中包含 bilibili.com / b23.tv / BV号 / douyin.com / v.douyin.com / iesdouyin.com 链接（或抖音分享口令文本），且要求总结、做笔记、整理复习资料、提取视频内容等。
+用户消息中包含 bilibili.com / b23.tv / BV号 / douyin.com / v.douyin.com / iesdouyin.com / youtube.com / youtu.be（含 /shorts/、/live/）链接（或抖音分享口令文本），且要求总结、做笔记、整理复习资料、提取视频内容等。
 
 ## 平台分流（第一步先看链接属于哪个平台）
 
 - **B站** → `bili_fetch.py`：走官方API，优先字幕，按需下载音频/视频流
 - **抖音** → `douyin_fetch.py`：游客身份（无需登录/SESSDATA），直接下载无水印视频到本地，一般无字幕 → 必走第二步ASR（抖音视频短，耗时可忽略）。需要 `pip install gmssl`；`abogus.py` 为 GPLv3 代码（源自 Evil0ctal/Douyin_TikTok_Download_API 经 BiliNote 移植），分发需保留其许可头
-- 两个平台的 metadata.json 字段一致，第二/三步脚本自动兼容：B站分P按 `bvid/cid` 按需下载，抖音分P带 `media_path` 直接用本地视频文件
+- **YouTube** → `yt_fetch.py`：字幕三级回退（youtube-transcript-api 人工→自动字幕 → yt-dlp json3 字幕 → 无字幕交 ASR），有字幕时不下载任何媒体；需要 `pip install yt-dlp youtube-transcript-api`，并建议安装 [deno](https://deno.com)（yt-dlp 解 YouTube JS 挑战所需）
+- 三个平台的 metadata.json 字段一致，第二/三步脚本自动兼容：B站分P按 `bvid/cid` 按需下载，抖音分P带 `media_path` 直接用本地视频文件
 
 ## 工具位置
 
@@ -37,6 +38,11 @@ python "<skill安装目录>/scripts/bili_fetch.py" --probe "<视频链接>"
 
 # 抖音（也支持 v.douyin.com 短链和整段分享口令文本）
 python "<skill安装目录>/scripts/douyin_fetch.py" "<链接或口令>" "<工作目录>/douyin-notes-<视频ID>"
+
+# YouTube（watch / youtu.be / shorts / live / embed 链接或 11 位 ID 均可）
+python "<skill安装目录>/scripts/yt_fetch.py" "<视频链接>" "<工作目录>/yt-notes-<视频ID>"
+# 可选：--lang zh-Hans,en（字幕语言优先级）--download（无字幕时下载音频供 ASR）
+#       --cookies <cookies.txt> / --cookies-from-browser chrome（风控/年龄限制）--proxy http://127.0.0.1:7890
 ```
 
 - 两个脚本都自动生成 `<输出目录>/metadata.json`，stdout 最后一行是 JSON 摘要。
@@ -47,6 +53,12 @@ python "<skill安装目录>/scripts/douyin_fetch.py" "<链接或口令>" "<工�
   - `api_empty` → 接口没返回可用字幕URL（`sessdata_loaded:false` 时常见，AI字幕需要登录）：**主动询问用户「要现在扫码登录B站吗？」，确认后代跑 `python "<skill安装目录>/scripts/bili_fetch.py" --login`（脚本生成二维码 PNG 图片并打印路径，把路径给用户打开扫码即登录，SESSDATA 自动写入 config.json）后重跑一次 fetch**；用户拒绝或重跑后仍是 `api_empty` 才走第二步 ASR 兜底；
   - `error` → 查看摘要里的 error 信息（可能是视频失效/风控），重试一次或直接告知用户。
 - **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（无水印，本地已存在则跳过下载），无字幕，直接进入第二步 ASR。
+- **YouTube**：按摘要里分P的 `subtitle_detail` 分流：
+  - `manual` / `auto` / `ytdlp_manual` / `ytdlp_auto` → 已写出 `01_<标题>.txt`（`[mm:ss]` 格式，自动字幕已去滚动重复）+ `.done` 标记，直接进入第三步；`subtitle_lang` 为英文等非中文时，笔记用中文撰写、术语保留原文；
+  - `none` → 无可用字幕：加 `--download` 重跑（下载音频到 `media_p01.m4a`），再进入第二步 ASR；
+  - `blocked` → YouTube 拒绝了当前 IP：先建议用户配 `--proxy` 或 `--cookies-from-browser` 重跑；仍不行再 `--download` 走 ASR；
+  - `error` → 看 stderr 日志，重试一次或告知用户。
+  - 没有 `media_path` 的 YouTube 分P不能直接跑第二步（脚本不会去 B站接口下载），务必先 `--download`。
 
 ### 第二步（兜底）：语音识别转写
 
@@ -98,7 +110,7 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
    `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，按类别分组只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份，命中词条 hits 自动累加）。词表分两层：仓库层 `references/asr-glossary.json`（编程/美食/游戏/通用大类）+ 用户层（输出目录 `glossary.user.json` 或 `~/.zcode/bdn-glossary.user.json`，同键用户层优先）；候选词命中只报告（标 `[候选]`）永不替换。**维护闭环**：发现词表未覆盖的新错法 → `--add "错法=正确词" --category 编程`（或 `--candidate` 先入候选、`--promote "错法"` 转正）；`--list` 查看全部；`--categories`/`--topic` 控制启用范围。注意：转写阶段已自动把高频术语注入 initial_prompt（见第二步），词表越丰富转写越准。
 3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节（该去重仅作用于分块合并的中间产物；正文按 v3 规则仍然禁时刻）。禁止跳过分块直接全文阅读长转写稿。
 4. 按 `references/note-template.md`（**v3 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `课堂笔记-<序号>-<主题>.md`（序号看用户已有的课堂笔记文件递增；主题取视频标题关键词）。生成前必读该模板文件。v3 硬性要求：
-   - **frontmatter**（`---` 包围）写全（字段与 v2 一致）：`template_version: v3`、`note_type`（取 metadata.json 顶层 `suggested_note_type`，技术密度高的短片可覆盖为 lecture）、`platform`、`bvid`（抖音填 `video_id`）、`source`、`created`、`duration`（带引号的 `"mm:ss"`）；
+   - **frontmatter**（`---` 包围）写全（字段与 v2 一致）：`template_version: v3`、`note_type`（取 metadata.json 顶层 `suggested_note_type`，技术密度高的短片可覆盖为 lecture）、`platform`、`bvid`（抖音 / YouTube 填 `video_id`）、`source`、`created`、`duration`（带引号的 `"mm:ss"`）；
    - **标题区**：`# 课堂笔记 <序号>：<主题>`，引语块先 `> 核心主线：`（一句话串起全片知识主线）再 `> 课程来源：`，有代码仓库再加 `> 课程代码：`；目录条目 `- [N. 小节名](#锚点)` 不带时刻，末尾固定列出 本讲知识地图 / 概念卡片 / 自测题（复习用）/ 视频时间索引；
    - **小节**：`## N. 小节名`（禁时刻后缀），以 `**核心思想：** <一句话>` 开头，每小节 ≥3 行实质内容；要点用普通列表 `- 要点句`、关键术语 `**加粗**`，**禁止三词标签前缀（核心必考/重点掌握/了解即可及任何变体）、禁止行内 `[mm:ss]`**；对比性内容优先用表格；
    - **代码块**：真实语言 fence；来源标注可选——来自克隆仓库写 `# 来源：仓库 <子项目>/<文件路径>`（注释符随语言），按视频讲解组织的可写 `# 按视频讲解还原` 或不写；任何代码块内禁时刻；
@@ -109,7 +121,7 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
 6. **填充时间索引深链（v3 笔记默认执行）**：
    `python "<skill安装目录>/scripts/note_nav.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
-   脚本幂等替换 NAV 标记之间的内容，把 `- [mm:ss] 标题` 条目填充为 `- [mm:ss](URL) 标题`（B站生成 `?p=N&t=S` 深链，抖音无深链保持纯文本）；`note_type=short` 跳过本步；笔记里 NAV 标记缺失时 warning 跳过。v2 老笔记仅在用户明确要时间导航时才执行本步。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
+   脚本幂等替换 NAV 标记之间的内容，把 `- [mm:ss] 标题` 条目填充为 `- [mm:ss](URL) 标题`（B站生成 `?p=N&t=S` 深链，YouTube 生成 `watch?v=<id>&t=<秒>s` 深链，抖音无深链保持纯文本）；`note_type=short` 跳过本步；笔记里 NAV 标记缺失时 warning 跳过。v2 老笔记仅在用户明确要时间导航时才执行本步。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
 7. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
    errors 必须为 0 才交付；warnings 酌情处理（如精简篇幅）。门禁按 frontmatter 的 `template_version` 分派 v3 / v2 / v1 规则（缺失视为 v1 走旧 ★ 规则；v3 下正文出现时刻、标签残留、时间索引缺失（lecture）、自测数量越界、答案或概念卡含时刻等均为 error）。**破坏性变更（v2 起）**：报告 JSON 的 `errors` / `warnings` 从字符串数组升级为**对象数组**（每项含 `check` 检查编号与 `line` 行号），调用方若按字符串解析需同步适配。
@@ -151,4 +163,8 @@ lecture 完整骨架、时间戳规范、语法契约、short 差异表、截图
 | 转写质量差（长视频尤甚） | 先删对应 txt，再用 `--model medium` 重转；有 NVIDIA GPU 时脚本会自动用 CUDA float16，也可 `--device cuda` 强制 |
 | 抖音 detail 接口 403 / "无 aweme_detail" | 签名算法可能被抖音升级，参考 Evil0ctal/Douyin_TikTok_Download_API 或 JefferyHcool/BiliNote 更新 `abogus.py` / `WEB_SIGN_SALT`；另确认视频可公开访问（非私密/仅粉丝可见） |
 | 抖音视频下载中断/文件过小 | 下载地址有时效，重跑 douyin_fetch.py 重新解析即可（本地已有完整 mp4 会自动跳过下载） |
-| 环境缺依赖 | B站流程需 faster-whisper + av；抖音流程另需 `pip install gmssl` |
+| YouTube 报 "Sign in to confirm you're not a bot" / `blocked` | 云服务器 IP 常被 YouTube 拒绝：加 `--cookies-from-browser chrome`（或导出 cookies.txt 用 `--cookies`），必要时 `--proxy` 或在 config.json 配 `youtube_proxy` |
+| YouTube 缺格式 / 下载失败 | 升级 `pip install -U yt-dlp` 并安装 deno（2025 年起 YouTube 需要 JS 运行时解挑战） |
+| YouTube 年龄限制视频 | youtube-transcript-api 拿不到，需 `--cookies`/`--cookies-from-browser` 让 yt-dlp 回退取字幕 |
+| YouTube 正在直播 / 预告 | 脚本直接提示退出，等直播结束、回放生成后再试 |
+| 环境缺依赖 | B站流程需 faster-whisper + av；抖音流程另需 `pip install gmssl`；YouTube 流程另需 `pip install yt-dlp youtube-transcript-api` |
