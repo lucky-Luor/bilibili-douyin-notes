@@ -13,12 +13,15 @@
     stdout 最后一行输出 JSON 摘要（供调用方解析）
 
 字幕状态（每个分P的 subtitle_detail 字段）:
-    cc / ai       拿到字幕（subtitle=true）；AI 字幕另做内容与标题的交叉校验
+    cc / ai       拿到字幕（subtitle=true）；字幕接口 wbi/v2 优先、v2 兜底并多轮
+                  重试，优先取 UP 主上传的 CC 字幕；多轮都只有 AI 字幕才取 AI，
+                  AI 字幕另做内容与标题的交叉校验
     ai_mismatch   AI 字幕整体错位（返回了 ai 状态但内容是别的音频，实测案例
-                  BV1GKaG6zEtr 配的是无关电影对白）→ 不可信，存疑字幕另存
+                  BV1GKaG6zEtr 配的是无关电影对白；/x/player/v2 会随机返回这类
+                  错配 AI 字幕）→ 不可信，存疑字幕另存
                   *.ai字幕存疑.txt 备查，本分P按无字幕处理直接走 ASR 兜底
     api_empty     任一接口出现了字幕轨但全无可用 URL（/x/player/v2 对部分视频
-                  只给元信息不给 URL 的已知问题，已自动尝试 wbi/v2 兜底）
+                  只给元信息不给 URL 的已知问题，已自动多轮尝试 wbi/v2 与 v2）
                   → 主动询问扫码登录（--login，生成二维码 PNG 图片）后重跑；
                   拒绝/仍失败可手填 SESSDATA 兜底，或直接走 ASR
     none          所有字幕接口都完全没有字幕轨 → 确实无字幕，直接走 ASR；
@@ -40,6 +43,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CONFIG = Path(__file__).resolve().parent.parent / "config.json"
 RETRIES = 3  # 与抖音侧一致的失败重试次数
+SUBTITLE_ROUNDS = 5  # 字幕接口轮询轮数：v2 会随机返回错配的 AI 字幕，多轮以拿到 CC 字幕
+SUBTITLE_ROUND_INTERVAL = 1  # 字幕接口轮询间隔（秒）
 
 
 def load_sessdata() -> str:
@@ -239,11 +244,20 @@ def atomic_write_text(path: Path, text: str):
     os.replace(tmp, path)
 
 
-def fetch_subtitles(bvid: str, cid: int, cookie: str) -> tuple[list, bool]:
-    """依次尝试 player/v2 与 player/wbi/v2，返回 (可用字幕条目, 是否出现过字幕轨)。
+def _is_ai_sub(s: dict) -> bool:
+    """字幕轨是否为 B 站 AI 字幕（ai_type 非 0 或 lan 以 ai 开头）。"""
+    return s.get("ai_type", 0) != 0 or s.get("lan", "").startswith("ai")  # 两种标记任一命中即为 AI
 
-    /x/player/v2 对大量视频只返回 ai-zh 元信息而 subtitle_url 为空（已知问题），
-    wbi/v2 是实测更可能给出真实 URL 的兜底接口。
+
+def fetch_subtitles(bvid: str, cid: int, cookie: str,
+                    rounds: int = SUBTITLE_ROUNDS) -> tuple[list, bool]:
+    """多轮尝试 player/wbi/v2 与 player/v2，返回 (可用字幕条目, 是否出现过字幕轨)。
+
+    实测 /x/player/v2 会**随机**返回三种结果：UP 主上传的 CC 字幕、内容错配的
+    ai-zh 字幕（别的视频的音频）、或 subtitle_url 为空；而 wbi/v2 对同一分P
+    稳定返回 CC 字幕。因此 wbi/v2 优先、v2 兜底，并多轮重试：任一轮拿到
+    非 AI 且有 URL 的字幕轨立即返回；全部轮次都只有 AI 字幕时才返回 AI 字幕
+    （交给调用方的 ai_mismatch 交叉校验与 ASR 兜底）。
 
     返回值语义（调用方据此三态分发）:
         usable 非空           -> 有可用字幕 URL，直接走字幕
@@ -253,21 +267,28 @@ def fetch_subtitles(bvid: str, cid: int, cookie: str) -> tuple[list, bool]:
     单个接口异常/失败视为"未探测到"，continue 尝试下一个接口，不算 none 的依据；
     只要任一接口出现了字幕轨（哪怕无可用 URL），saw_track 即为 True。
     """
-    usable: list = []
-    saw_track = False
-    for path in ("x/player/v2", "x/player/wbi/v2"):
-        try:
-            player = api(f"https://api.bilibili.com/{path}?bvid={bvid}&cid={cid}", cookie)
-        except Exception:
-            continue  # 接口异常不置 saw_track，也不算"确认无字幕"
-        subs = (player.get("data") or {}).get("subtitle", {}).get("subtitles", []) or []
-        if subs:
-            saw_track = True
-        # 过滤空 URL：有 URL 的条目才可用；取第一个给出可用字幕的接口
-        usable = [s for s in subs if (s.get("subtitle_url") or "").strip()]
-        if usable:
-            return usable, True
-    return [], saw_track
+    ai_usable: list = []  # 兜底用：轮询中见到的第一批可用 AI 字幕
+    saw_track = False  # 是否在任一接口、任一轮见到过字幕轨
+    for rnd in range(max(1, rounds)):  # 至少请求一轮
+        if rnd:  # 非首轮先等待，避免连续请求触发风控
+            time.sleep(SUBTITLE_ROUND_INTERVAL)  # 轮间间隔
+        for path in ("x/player/wbi/v2", "x/player/v2"):  # wbi/v2 结果稳定，排在前面
+            try:
+                player = api(f"https://api.bilibili.com/{path}?bvid={bvid}&cid={cid}", cookie)  # 请求播放器信息
+            except Exception:
+                continue  # 接口异常不置 saw_track，也不算"确认无字幕"
+            subs = (player.get("data") or {}).get("subtitle", {}).get("subtitles", []) or []  # 取字幕轨列表
+            if subs:  # 出现过字幕轨（不论 URL 是否为空）
+                saw_track = True  # 记录，供 api_empty / none 判定
+            usable = [s for s in subs if (s.get("subtitle_url") or "").strip()]  # 过滤空 URL
+            cc = [s for s in usable if not _is_ai_sub(s)]  # 其中的非 AI（UP 主上传）字幕
+            if cc:  # 拿到可信的 CC 字幕
+                return cc, True  # 立即返回，不再重试
+            if usable and not ai_usable:  # 只有 AI 字幕：先记下，继续重试找 CC
+                ai_usable = usable  # 保留首批 AI 字幕作兜底
+    if ai_usable:  # 所有轮次都没有 CC，退回 AI 字幕（保持改动前行为）
+        return ai_usable, True  # 由调用方做 ai_mismatch 校验
+    return [], saw_track  # 无可用 URL：按 saw_track 区分 api_empty / none
 
 
 def _reconfigure_stdout() -> None:

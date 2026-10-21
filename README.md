@@ -17,7 +17,7 @@
 </div>
 
 > 💬 对 AI 说一句「帮我把这个视频做成课堂笔记：<B站/抖音/YouTube/小红书链接>」，就能得到下面这样的笔记 👇
-> （完整示例：[李宏毅机器学习 · 局部最小值与鞍点](examples/课堂笔记-01-局部最小值与鞍点.md)）
+> （完整示例：[李宏毅机器学习 · 局部最小值与鞍点](examples/01-局部最小值与鞍点.md)）
 
 <p align="center"><img src="docs/images/note-preview.png" alt="课堂笔记效果预览" width="760"></p>
 
@@ -176,11 +176,11 @@ python scripts/apply_glossary.py "<输出目录>/01_分P名.txt"
 # （可选）抽取重点截图（需 ASCII 文件名时加 --ascii-names）
 python scripts/bili_screenshot.py "<输出目录>/metadata.json" "<输出目录>" "<输出目录>/images"
 
-# 时间索引深链填充（v3 笔记默认执行，short 跳过）
-python scripts/note_nav.py "<笔记.md>" --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
+# 时间索引深链填充（v4 笔记默认执行，short 跳过）
+python scripts/note_nav.py "<笔记.md>" --template v4 --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
 
 # 生成笔记后的质量门禁（errors 为 0 才交付）
-python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
+python scripts/validate_note.py "<笔记.md>" --template v4 --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
 ```
 
 ## 📁 目录结构
@@ -196,7 +196,7 @@ python scripts/validate_note.py "<笔记.md>" --meta "<输出目录>/metadata.js
 │   ├── bili_screenshot.py # 重点截图（锚点/自动关键词 + PyAV 抽帧 + 像素占比法 QC）
 │   ├── transcript_chunk.py# 长转写稿分块（map-reduce 前置）
 │   ├── apply_glossary.py  # ASR 术语校正（dry-run 报告 / --apply 落盘）
-│   ├── note_nav.py        # 时间索引深链填充 / v2 参考时间戳生成
+│   ├── note_nav.py        # 时间索引深链填充
 │   ├── clean_media.py     # 询问式媒体清理（默认只列清单、--apply 实删）
 │   ├── validate_note.py   # 笔记质量门禁（errors 为 0 才交付）
 │   ├── ensure_abogus.py   # abogus.py 缺失时从上游固定 commit 下载（SHA-256 校验）

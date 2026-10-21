@@ -104,6 +104,70 @@ def test_fetch_subtitles_no_usable(monkeypatch):
     assert usable == []
 
 
+# ---------- fetch_subtitles：wbi 优先 + 多轮重试取 CC（v2 会随机返回错配 AI 字幕） ----------
+
+@pytest.fixture(autouse=True)
+def _no_round_interval(monkeypatch):
+    """字幕轮询间隔置 0，避免离线测试真实等待。"""
+    monkeypatch.setattr(bili_fetch, "SUBTITLE_ROUND_INTERVAL", 0)  # 轮间不等待
+
+
+def _player(*subs):
+    """构造 player 接口返回体。"""
+    return {"data": {"subtitle": {"subtitles": list(subs)}}}  # 与真实接口结构一致
+
+
+AI_SUB = {"lan": "ai-zh", "ai_type": 1, "subtitle_url": "https://a/ai.json"}  # 错配的 AI 字幕轨
+CC_SUB = {"lan": "zh-CN", "ai_type": 0, "subtitle_url": "https://a/cc.json"}  # UP 主上传的 CC 字幕轨
+
+
+def test_fetch_subtitles_retries_until_cc(monkeypatch):
+    calls = []  # 记录请求过的接口地址
+    replies = iter([_player(AI_SUB)] * 4 + [_player(CC_SUB)])  # 前 4 次只有 AI，第 5 次出现 CC
+
+    def fake_api(url, cookie=""):
+        calls.append(url)  # 记录调用
+        return next(replies)  # 按顺序返回
+
+    monkeypatch.setattr(bili_fetch, "api", fake_api)  # 替换网络请求
+    usable, saw = bili_fetch.fetch_subtitles("BV1xx411c7mD", 1, "")  # 执行
+    assert [s["lan"] for s in usable] == ["zh-CN"]  # 最终取到 CC
+    assert saw is True  # 见过字幕轨
+    assert len(calls) == 5  # 第 3 轮的 wbi/v2 拿到 CC 后立即停止
+
+
+def test_fetch_subtitles_tries_wbi_first(monkeypatch):
+    calls = []  # 记录请求过的接口地址
+
+    def fake_api(url, cookie=""):
+        calls.append(url)  # 记录调用
+        return _player(CC_SUB)  # 直接返回 CC
+
+    monkeypatch.setattr(bili_fetch, "api", fake_api)  # 替换网络请求
+    bili_fetch.fetch_subtitles("BV1xx411c7mD", 1, "")  # 执行
+    assert len(calls) == 1 and "/x/player/wbi/v2?" in calls[0]  # 首个请求就是 wbi/v2 且一次即返回
+
+
+def test_fetch_subtitles_falls_back_to_ai_after_all_rounds(monkeypatch):
+    calls = []  # 记录请求过的接口地址
+
+    def fake_api(url, cookie=""):
+        calls.append(url)  # 记录调用
+        return _player(AI_SUB)  # 始终只有 AI 字幕
+
+    monkeypatch.setattr(bili_fetch, "api", fake_api)  # 替换网络请求
+    usable, saw = bili_fetch.fetch_subtitles("BV1xx411c7mD", 1, "", rounds=3)  # 执行 3 轮
+    assert [s["lan"] for s in usable] == ["ai-zh"]  # 退回 AI 字幕，交给 ai_mismatch 校验
+    assert saw is True  # 见过字幕轨
+    assert len(calls) == 6  # 3 轮 × 2 个接口全部请求过
+
+
+def test_fetch_subtitles_none_when_no_track(monkeypatch):
+    monkeypatch.setattr(bili_fetch, "api", lambda url, cookie="": _player())  # 所有接口都没有字幕轨
+    usable, saw = bili_fetch.fetch_subtitles("BV1xx411c7mD", 1, "", rounds=2)  # 执行 2 轮
+    assert usable == [] and saw is False  # 判为 none（确实无字幕）
+
+
 # ---------- safe_name ----------
 
 def test_safe_name_replaces_illegal_chars():

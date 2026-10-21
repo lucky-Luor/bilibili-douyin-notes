@@ -17,7 +17,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 </div>
 
 > 💬 Just tell your AI agent "make lecture notes from this video: <Bilibili / Douyin / YouTube / Xiaohongshu link>" and you get notes like this 👇
-> (Full example: [Hung-yi Lee ML course · Local Minima & Saddle Points](examples/课堂笔记-01-局部最小值与鞍点.md), in Chinese)
+> (Full example: [Hung-yi Lee ML course · Local Minima & Saddle Points](examples/01-局部最小值与鞍点.md), in Chinese)
 
 <p align="center"><img src="docs/images/note-preview.png" alt="Note preview" width="760"></p>
 
@@ -112,8 +112,8 @@ python scripts/douyin_fetch.py "<url or share text>" "<outdir>"  # Douyin: metad
 python scripts/yt_fetch.py "<url>" "<outdir>"  # YouTube: metadata + captions (--download for audio)
 python scripts/xhs_fetch.py "<share link or text>" "<outdir>"  # Xiaohongshu: metadata + video (link must carry xsec_token)
 python scripts/bili_transcribe.py "<outdir>/metadata.json"  # local ASR when no subtitles
-python scripts/note_nav.py "<note.md>" --meta "<outdir>/metadata.json" --txt-dir "<outdir>"       # fill deep links
-python scripts/validate_note.py "<note.md>" --meta "<outdir>/metadata.json" --txt-dir "<outdir>"  # quality gate
+python scripts/note_nav.py "<note.md>" --template v4 --meta "<outdir>/metadata.json" --txt-dir "<outdir>"       # fill deep links
+python scripts/validate_note.py "<note.md>" --template v4 --meta "<outdir>/metadata.json" --txt-dir "<outdir>"  # quality gate
 ```
 
 ## ❓ FAQ

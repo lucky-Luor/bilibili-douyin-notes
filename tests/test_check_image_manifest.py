@@ -125,18 +125,3 @@ def test_no_manifest_skips(tmp_path):
     assert res["checked"] == 0
     assert res["mismatched"] == []
     assert res["note"]
-
-
-def test_registered_into_check_note_warnings(tmp_path):
-    """check_note 中通过现有 warning 通道输出检查14 结果。"""
-    note = ("---\ntemplate_version: v1\n---\n\n# 笔记\n\n## 第一节\n\n"
-            "- ★★★ 循环依赖的三级缓存 [00:10]\n\n![无关画面](images/p01_a.png)\n\n"
-            "正文一二三四五六七。\n\n## 本讲知识地图\n\n- A\n- B\n- C\n\n"
-            "## 自测题（复习用）\n\n1. 一？\n2. 二？\n3. 三？\n4. 四？\n5. 五？\n\n"
-            "## 参考时间戳\n\n- [00:10] 开场\n- [00:20] 中段\n- [00:30] 末尾\n")
-    (tmp_path / "note.md").write_text(note, encoding="utf-8")
-    (tmp_path / "images").mkdir()
-    (tmp_path / "images" / "manifest.json").write_text(
-        json.dumps(make_manifest(t=200), ensure_ascii=False), encoding="utf-8")
-    report = validate_note.check_note(note, tmp_path / "note.md", None, None)
-    assert any("检查14" in w for w in report["warnings"])
