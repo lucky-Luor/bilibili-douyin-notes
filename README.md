@@ -196,7 +196,7 @@ python scripts/validate_note.py "<笔记.md>" --template v4 --meta "<输出目�
 │   ├── bili_screenshot.py # 重点截图（锚点/自动关键词 + PyAV 抽帧 + 像素占比法 QC）
 │   ├── transcript_chunk.py# 长转写稿分块（map-reduce 前置）
 │   ├── apply_glossary.py  # ASR 术语校正（dry-run 报告 / --apply 落盘）
-│   ├── note_nav.py        # 时间索引深链填充 / v2 参考时间戳生成
+│   ├── note_nav.py        # 时间索引深链填充
 │   ├── clean_media.py     # 询问式媒体清理（默认只列清单、--apply 实删）
 │   ├── validate_note.py   # 笔记质量门禁（errors 为 0 才交付）
 │   ├── ensure_abogus.py   # abogus.py 缺失时从上游固定 commit 下载（SHA-256 校验）

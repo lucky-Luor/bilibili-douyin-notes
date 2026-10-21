@@ -2,13 +2,12 @@
 
 **版本：v4**（语雀直导版式；调用门禁 / 深链脚本时传 `--template v4`）
 
-> **v1 / v2 / v3 冻结说明**：v1（★ 符号体系）、v2（三词文字标签）、v3（frontmatter +
-> NAV 折叠区）自本版起冻结、不再演进，但仍继续支持——质量门禁
-> `scripts/validate_note.py` 不带 `--template` 时按笔记 frontmatter 的
-> `template_version` 字段分派 v3 / v2 / v1 规则，既有笔记零改动继续可校验。
-> **新笔记一律按本文件（v4）生成**：内容规则与 v3 相同（正文零时间戳、零考试向标签、
-> 按知识体系组织），版式改为**可直接导入语雀**的纯 Markdown——无 frontmatter、
-> 无一级标题、`+` 列表、答案与时间索引不折叠。
+> **版本说明**：v1（★ 符号体系）与 v2（三词文字标签）已移除，门禁与深链脚本不再支持；
+> v3（frontmatter + NAV 折叠区）冻结、仍可校验——笔记 frontmatter 写
+> `template_version: v3` 时按 v3 规则检查。**新笔记一律按本文件（v4）生成**：
+> 正文零时间戳、零考试向标签、按知识体系组织，版式为**可直接导入语雀**的纯 Markdown——
+> 无 frontmatter、无一级标题、`+` 列表、答案与时间索引不折叠。
+> 没有 frontmatter 的笔记默认按 v4 检查，`--template v4` 可省略（写上也可以）。
 
 本文件是本 skill 生成课堂笔记的**唯一模板与规范**，包含：文件命名、lecture 完整骨架 +
 short 差异表、时间戳规范、语法契约（要点表达 / 概念卡片 / 自测题 / 知识地图 /
@@ -28,7 +27,7 @@ short 差异表、时间戳规范、语法契约（要点表达 / 概念卡片 /
   文件名即语雀文档标题，所以**正文不写 `# 一级标题`**；
 - **禁止** frontmatter（`---` 包围的元数据块）——语雀会把它当正文显示；
 - 原 frontmatter 的元信息改由命令行与 `metadata.json` 提供：
-  - 模板版本：门禁 / 深链脚本传 `--template v4`；
+  - 模板版本：门禁 / 深链脚本传 `--template v4`（可省略：无 frontmatter 默认按 v4）；
   - 笔记类型：`--note-type lecture|short`，缺省取 metadata.json 顶层
     `suggested_note_type`，再缺省视为 `lecture`；
   - 平台与视频 ID：取 metadata.json 的 `platform` 与 `bvid` / `video_id`；
@@ -301,18 +300,16 @@ graph TD
 
 ---
 
-## 附：v1 / v2 / v3 冻结差异速查
+## 附：v3 / v4 差异速查
 
 （v3 完整规范见 git 历史中本文件的 v3 版本）
 
-| 项 | v1（冻结） | v2（冻结） | v3（冻结） | v4（现行） |
-|---|---|---|---|---|
-| 元信息 | 无 | frontmatter | frontmatter（含 duration） | 无 frontmatter，`--template v4` + metadata.json |
-| 标题 | `# 课堂笔记 NN：主题` | 同左 | 同左 | 无一级标题，文件名 `<序号>-<主题>.md` |
-| 列表符号 | `-` | `-` | `-` | `+` |
-| 重点分级 | ★ 符号 | 三词标签 | 无标签，术语加粗 | 同 v3 |
-| 时间戳 | 行内常见 | 行内可选 | 正文禁用，仅文末索引 | 同 v3 |
-| 概念卡「出现」 | — | `2（mm:ss）` | `2、5` | `第 2 节「小节名」、第 5 节「小节名」` |
-| 自测答案 | — | `<details>` 折叠 | `<details>` 折叠 | 不折叠，空行后 `**答案：**` |
-| 时间导航 | — | “参考时间戳”可选 | `<details>` + NAV 标记 | 不折叠、无 NAV 标记，`+ [mm:ss](URL) 标题` |
-| 知识地图 | — | mermaid | mermaid mindmap | mermaid graph TD（推荐） |
+| 项 | v3（冻结） | v4（现行） |
+|---|---|---|
+| 元信息 | frontmatter（含 duration） | 无 frontmatter，metadata.json + 命令行参数 |
+| 标题 | `# 课堂笔记 NN：主题` | 无一级标题，文件名 `<序号>-<主题>.md` |
+| 列表符号 | `-` | `+` |
+| 概念卡「出现」 | `2、5` | `第 2 节「小节名」、第 5 节「小节名」` |
+| 自测答案 | `<details>` 折叠 | 不折叠，空行后 `**答案：**` |
+| 时间导航 | `<details>` + NAV 标记 | 不折叠、无 NAV 标记，`+ [mm:ss](URL) 标题` |
+| 知识地图 | mermaid mindmap | mermaid graph TD（推荐） |

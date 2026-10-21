@@ -127,10 +127,10 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
 6. **填充时间索引深链（v4 笔记默认执行）**：
    `python "<skill安装目录>/scripts/note_nav.py" "<笔记.md>" --template v4 --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
-   （每个选集单独一份笔记时加 `--page <分P号>`）脚本幂等地把「## 视频时间索引」节内的 `+ [mm:ss] 标题` 条目原位填充为 `+ [mm:ss](URL) 标题`（B站生成 `?p=N&t=S` 深链，YouTube 生成 `watch?v=<id>&t=<秒>s` 深链，抖音 / 小红书无深链保持纯文本）；`note_type=short` 跳过本步；找不到时间索引节时 warning 跳过。v3 老笔记不带 `--template`（按 NAV 标记填链）；v2 老笔记仅在用户明确要时间导航时才执行本步。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
+   （每个选集单独一份笔记时加 `--page <分P号>`）脚本幂等地把「## 视频时间索引」节内的 `+ [mm:ss] 标题` 条目原位填充为 `+ [mm:ss](URL) 标题`（B站生成 `?p=N&t=S` 深链，YouTube 生成 `watch?v=<id>&t=<秒>s` 深链，抖音 / 小红书无深链保持纯文本）；`note_type=short` 跳过本步；找不到时间索引节时 warning 跳过。v3 老笔记（frontmatter 写 v3）按 NAV 标记填链；v1 / v2 已不再支持。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
 7. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --template v4 --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
-   （每个选集单独一份笔记时加 `--page <分P号>`）errors 必须为 0 才交付；warnings 酌情处理（如精简篇幅）。v4 笔记必须带 `--template v4`（v4 无 frontmatter，不带参数会被当成 v1 老笔记）；v4 下出现 frontmatter / 一级标题、正文时刻、标签残留、`<details>` 折叠或 NAV 标记、时间索引缺失（lecture）、自测数量越界、概念卡「出现」格式非法等均为 error。老笔记不带 `--template` 时按 frontmatter 的 `template_version` 分派 v3 / v2 / v1 规则（缺失视为 v1 走旧 ★ 规则；v3 下正文出现时刻、标签残留、时间索引缺失（lecture）、自测数量越界、答案或概念卡含时刻等均为 error）。**破坏性变更（v2 起）**：报告 JSON 的 `errors` / `warnings` 从字符串数组升级为**对象数组**（每项含 `check` 检查编号与 `line` 行号），调用方若按字符串解析需同步适配。
+   （每个选集单独一份笔记时加 `--page <分P号>`）errors 必须为 0 才交付；warnings 酌情处理（如精简篇幅）。没有 frontmatter 的笔记默认按 v4 检查（`--template v4` 可省略）；v4 下出现 frontmatter / 一级标题、正文时刻、标签残留、`<details>` 折叠或 NAV 标记、时间索引缺失（lecture）、自测数量越界、概念卡「出现」格式非法等均为 error。frontmatter 写 `template_version: v3` 的老笔记按 v3 规则检查；写 v1 / v2 或缺版本号会直接报 `VERSION` 错误（v1 / v2 规则已移除）。报告 JSON 的 `errors` / `warnings` 为**对象数组**（每项含 `check` 检查编号与 `line` 行号）。
 8. **媒体清理（交付后必问用户）**：若输出目录存在缓存媒体（抖音的 `media_p01.mp4` 等本地视频，或残留的 `.part`/`.audio_*`/`.video_*` 临时文件），**询问用户「是否清理缓存的视频/音频文件？重新做笔记会重新下载」**：确认 → 先跑
    `python "<skill安装目录>/scripts/clean_media.py" "<输出目录>"`
    把将删除的清单给用户过目，再执行 `--apply` 实删；拒绝 → 跳过并说明缓存保留的意义（重跑截图/转写不再联网）。B站的临时音频/视频在流程中已自动删除，通常无残留。

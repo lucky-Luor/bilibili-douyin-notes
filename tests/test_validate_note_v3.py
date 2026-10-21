@@ -4,7 +4,7 @@
 覆盖：V3-E1~E7 每条规则至少一正一反例、lecture/short 分型差异、B站/抖音平台
 差异（抖音纯文本条目不 warning）、保留检查（frontmatter/小节内容/核心思想/
 mermaid/图片/manifest/字数比）与版本分派回归。
-v1/v2 冻结回归由 test_validate_note.py / test_validate_note_v2.py（零修改）承担。
+v1 / v2 规则已移除；v4 见 test_validate_note_v4.py。
 """
 import json
 import subprocess
@@ -235,18 +235,14 @@ def test_dispatch_v3_routes_to_v3(tmp_path):
     assert report["ok"] is True
 
 
-def test_rules_for_still_returns_v2_for_v3():
-    """rules_for 保持 v2 时代语义（冻结测试钉死）；v3 判断只在 dispatch 内做。"""
-    assert validate_note.rules_for({"template_version": "v3"}) == "v2"
-
-
-def test_v1_v2_dispatch_unchanged(tmp_path):
-    """v1/v2/缺失 仍走原路径（规则回归由 test_validate_note*.py 冻结用例承担）。"""
-    v1_text = "---\ntemplate_version: v1\n---\n\n# 笔记\n\n正文"
-    assert check_dispatch(tmp_path, v1_text)["template_version"] == "v1"
-    v2_text = v1_text.replace("v1", "v2")
-    assert check_dispatch(tmp_path, v2_text)["template_version"] == "v2"
-    assert check_dispatch(tmp_path, "# 无 frontmatter")["template_version"] == "v1"
+def test_dispatch_unsupported_versions_and_no_frontmatter(tmp_path):
+    """v1 / v2 / 缺失版本报 VERSION；无 frontmatter 走 v4。"""
+    v1_text = "---\ntemplate_version: v1\n---\n\n# 笔记\n\n正文"  # v1 老笔记
+    for text in (v1_text, v1_text.replace("v1", "v2"),  # v1 与 v2
+                 "---\nnote_type: lecture\n---\n\n正文"):  # 有 frontmatter 但缺版本
+        report = check_dispatch(tmp_path, text)  # 走分派
+        assert not report["ok"] and report["errors"][0]["check"] == "VERSION"  # 版本报错
+    assert check_dispatch(tmp_path, "# 无 frontmatter")["template_version"] == "v4"  # 无 frontmatter 走 v4
 
 
 def test_v3_report_shape_object_arrays(tmp_path):

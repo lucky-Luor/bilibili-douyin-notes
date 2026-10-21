@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """validate_note.py v4 门禁（语雀直导版式）的离线测试。
 
-覆盖：合规样例零 error、CLI 端到端、版本分派（--template v4 / 不带参数时旧版本不变）、
+覆盖：合规样例零 error、CLI 端到端、版本分派（--template v4 / 不带参数默认 v4）、
 V4-FM/HEAD/NAME/LIST/IDEA/E1~E7/KM 每条规则至少一个反例。
 """
 import json  # 写 metadata.json
@@ -130,10 +130,10 @@ def test_good_note_zero_errors_zero_warnings(tmp_path):
     assert r["warnings"] == [], r["warnings"]  # 零 warning
 
 
-def test_without_template_flag_old_dispatch_unchanged(tmp_path):
-    note, _, _ = make_env(tmp_path)  # 准备文件
-    r = validate_note.check_note_dispatch(GOOD, note)  # 不传 template
-    assert r["template_version"] == "v1"  # 无 frontmatter 仍按 v1 冻结规则
+def test_without_template_flag_defaults_to_v4(tmp_path):
+    note, meta, txt = make_env(tmp_path)  # 准备文件
+    r = validate_note.check_note_dispatch(GOOD, note, meta, txt, only_page=13)  # 不传 template
+    assert r["template_version"] == "v4" and r["ok"], r["errors"]  # 无 frontmatter 默认走 v4
 
 
 def test_cli_end_to_end(tmp_path):
