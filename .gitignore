@@ -6,3 +6,13 @@ __pycache__/
 media_*.mp4
 # GPLv3 第三方签名算法，由 scripts/ensure_abogus.py 首次使用时按需下载，不入库
 scripts/abogus.py
+# 本地凭据文件（令牌、密钥等），任何目录下都不入库
+*.env
+# 以 .env 开头的凭据变体（如 .env.local），不入库
+.env*
+# 个人生成的课程笔记成品，属本地使用产物，不入库
+notes/
+# 个人上传素材与范例（含截图、凭据），不入库
+uploads/
+# 批处理工作区（字幕/识别稿、日志、临时脚本），不入库
+work/
