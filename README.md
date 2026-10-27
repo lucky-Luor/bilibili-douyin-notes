@@ -173,14 +173,17 @@ python scripts/bili_transcribe.py "<输出目录>/metadata.json"
 # ASR 术语校正：先 dry-run 看报告，确认后 --apply（自动留 .bak）
 python scripts/apply_glossary.py "<输出目录>/01_分P名.txt"
 
-# （可选）抽取重点截图（需 ASCII 文件名时加 --ascii-names）
-python scripts/bili_screenshot.py "<输出目录>/metadata.json" "<输出目录>" "<输出目录>/images"
+# （可选，带截图时）写完正文后按小节写 shots.json，再按清单抽帧（需 ASCII 文件名时加 --ascii-names）
+python scripts/bili_screenshot.py "<输出目录>/metadata.json" "<输出目录>" "<输出目录>/images" --shots "<输出目录>/shots.json"
 
 # 时间索引深链填充（v4 笔记默认执行，short 跳过）
 python scripts/note_nav.py "<笔记.md>" --template v4 --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
 
 # 生成笔记后的质量门禁（errors 为 0 才交付）
 python scripts/validate_note.py "<笔记.md>" --template v4 --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
+
+# （可选，带截图时）截图上传阿里云 OSS 并改写为 OSS 链接，便于导入语雀（默认预演，--apply 实际执行）
+python scripts/upload_images.py "<笔记.md>" --apply
 ```
 
 ## 📁 目录结构
@@ -193,7 +196,8 @@ python scripts/validate_note.py "<笔记.md>" --template v4 --meta "<输出目�
 │   ├── yt_fetch.py        # YouTube：元数据 + 字幕三级回退（无字幕按需下载音频）
 │   ├── xhs_fetch.py       # 小红书：视频笔记元数据 + 视频下载（免登录）
 │   ├── bili_transcribe.py # faster-whisper 本地 ASR 兜底（多平台兼容）
-│   ├── bili_screenshot.py # 重点截图（锚点/自动关键词 + PyAV 抽帧 + 像素占比法 QC）
+│   ├── bili_screenshot.py # 重点截图（shots.json 清单 / 关键词兜底 + 多帧择优 + 去重 + 像素占比法 QC）
+│   ├── upload_images.py   # 截图上传阿里云 OSS 并改写笔记链接（导入语雀用）
 │   ├── transcript_chunk.py# 长转写稿分块（map-reduce 前置）
 │   ├── apply_glossary.py  # ASR 术语校正（dry-run 报告 / --apply 落盘）
 │   ├── note_nav.py        # 时间索引深链填充
@@ -205,7 +209,7 @@ python scripts/validate_note.py "<笔记.md>" --template v4 --meta "<输出目�
 ├── examples/              # 示例笔记（真实视频生成，已通过质量门禁）
 ├── docs/images/           # README 配图
 ├── references/
-│   ├── anchors.json       # 截图关键词锚点表（时刻由脚本按转写稿运行时推导）
+│   ├── anchors.json       # 截图关键词锚点表（按视频 ID 隔离，仅在不用 --shots 清单时兜底）
 │   ├── asr-glossary.json  # ASR 技术术语校正表
 │   ├── glossary-user.example.json  # 用户层词表示例
 │   └── note-template.md   # 课堂笔记模板

@@ -111,6 +111,8 @@ short 差异表、时间戳规范、语法契约（要点表达 / 概念卡片 /
 + **action（动作）**圆角矩形是活动图最基本的符号
 + 课程用**颜色语义**扩展 action：浅蓝是用例、黄色是系统外、红色是内部实现
 
+![活动图颜色约定示例](images/p13_s2_color-legend.png)
+
 | 颜色 | 含义 |
 | --- | --- |
 | 浅蓝 | 用户目标用例 |
@@ -120,10 +122,15 @@ short 差异表、时间戳规范、语法契约（要点表达 / 概念卡片 /
 ```mermaid
 graph TD
   R((业务流程建模))
-  R --> G1[符号]
-  G1 --> L2[action]
-  R --> G3[颜色语义]
-  G3 --> L4[浅蓝用例]
+  subgraph S1[从用例到活动图]
+    U[用例] -->|串成流程| A[活动图]
+  end
+  subgraph S2[符号与颜色]
+    AC[action] -->|颜色赋予含义| C[颜色语义]
+  end
+  R --> A
+  A -->|基本符号| AC
+  U -.->|易混| A
 ```
 
 ## 概念卡片
@@ -187,17 +194,34 @@ graph TD
 - `出现` **至少 2 个小节**（不足为 warning：单节概念不必单独成卡）；
 - `依赖` / `易混` 可空；非空时引用的概念名应在概念卡片集合内（warning）。
 
-### 5.2 知识地图（mermaid）与节点标签卫生
+### 5.2 知识地图（mermaid 概念关系图）与节点标签卫生
+
+知识地图要回答**“这些概念之间是什么关系”**——目录已经给出了章节结构，地图不要再画一遍
+“主题 → 小节 → 要点”的树。
 
 ```mermaid
 graph TD
   R((<主题>))
-  R --> G1[分组1]
-  G1 --> L2[概念A]
+  subgraph S1[<小节或分组名>]
+    A[概念A] -->|依赖| B[概念B]
+  end
+  subgraph S2[<另一分组>]
+    C[概念C]
+  end
+  R --> A
+  B -->|推出| C
+  A -.->|易混| C
 ```
 
 - 写成 ```` ```mermaid ```` 代码块，**推荐 `graph TD`**（语雀导入后渲染为与样例一致的图）；
   首个非空行须为 `graph` / `flowchart` / `mindmap`；`mindmap` 时至少 2 级缩进；
+- **节点 = 概念卡片里的概念**：每张概念卡都要在地图中出现（节点标签包含概念名即可，
+  lecture 缺失为 error）；小节名 / 分组名放在 `subgraph` 标题上，**不要当节点**
+  （节点大面积等于小节标题会提示“复刻目录”，warning）；
+- **边要带关系标签**：`A -->|依赖| B`、`A -->|推出| B`、`A -->|组成| B`、`A -.->|易混| B`
+  （也接受 `A -- 标签 --> B`、`A -. 标签 .-> B`、`A == 标签 ==> B`）；
+  lecture 带标签的边**至少 = 概念卡数 − 1**（不足为 error）；关系尽量与概念卡的
+  「依赖 / 易混」字段一致，根节点到概念的连线可不带标签；
 - **节点标签卫生**（warning）：单个标签 ≤ 12 字（半角记 0.5 字）；`[...]` 标签内禁止
   `(` `)` `[` `]` `{` `}` `"`，需要括号时用全角（）；根节点 `R((主题))` 的圆形写法合法。
 
@@ -251,13 +275,31 @@ graph TD
 
 ## 七、截图嵌入规范
 
-- 用相对路径嵌入对应小节：`![说明](images/xxx.png)`（导入语雀前需把图片一并上传，
-  或改用语雀图床地址）；
-- **截图嵌在相关要点或所属小节附近**（跟随它佐证的内容，方便对照阅读）；
-- **caption（alt 文本）以锚点关键词开头**，门禁按 images/manifest.json 的
+> 截图是可选项：只有用户要“带截图的笔记”时才做。
+
+- **先写正文、再定截图**：正文写完后，Agent 按小节挑出真正需要画面佐证的时刻
+  （PPT 关键页、架构图、代码演示、表格），写成截图清单 `shots.json`：
+  ```json
+  {"shots": [
+    {"page": 13, "section": 2, "t": "05:12", "caption": "活动图颜色约定示例", "name": "color-legend"}
+  ]}
+  ```
+  `page` 分P号、`section` 笔记 `## N.` 小节号、`t` **转写稿里真实存在的时刻**（±5s，
+  不在转写稿里的时刻会被脚本拒绝）、`caption` 图注、`name` 文件名（可选）；
+  每小节 0~2 张，宁缺毋滥；再运行 `bili_screenshot.py ... --shots shots.json`；
+- 脚本每个时刻取 3 张候选帧、挑画面已静止且清晰的一张，同一页 PPT 只保留一张
+  （重复的记在输出的 `duplicates` 里）；
+- 用相对路径嵌入**清单里写的那个小节**：`![<caption>](images/p13_s2_color-legend.png)`，
+  放在它佐证的要点附近；门禁检查截图所在小节与清单 `section` 一致、不放在
+  目录 / 知识地图 / 概念卡片 / 自测题 / 时间索引里、不重复引用（V4-SHOT，warning）；
+- **caption（alt 文本）以清单 caption 开头**，门禁按 images/manifest.json 的
   `keyword` 字段交叉校验（warning）；caption 属于正文，**禁止含时刻**；
 - 截图文件名**默认可中文**；需要 ASCII 文件名时给 `bili_screenshot.py` 加 `--ascii-names`；
-- 脚本画质 QC 未通过的帧（`dark`/`bright`/`blurry`）由 Agent 视觉复核后决定是否采用。
+- 脚本画质 QC 未通过的帧（`dark`/`bright`/`blurry`）由 Agent 视觉复核后决定是否采用；
+  **嵌入前 Agent 应看一眼每张截图**，内容与 caption 不符就换时刻重抽或删掉；
+- **导入语雀前上传 OSS**：语雀导入 Markdown 不会上传本地图片，交付前运行
+  `upload_images.py <笔记.md>`（先预演）→ `--apply`，把 `images/` 路径改写成 OSS 链接
+  （门禁请在上传前跑——上传后图片是网络链接，位置与图注校验会跳过）。
 
 ## 八、生成流程（谁在什么时候调用什么）
 
@@ -269,14 +311,17 @@ graph TD
 2. bili_transcribe.py <metadata.json>      → 缺字幕分P的 txt
 3. apply_glossary.py <转写稿.txt>          → ASR 术语校正（先 dry-run，确认后 --apply）
 4. transcript_chunk.py <转写稿.txt>        → （单分P超约 2 万字时）分块 map-reduce
-5. bili_screenshot.py <meta> <txt> <img>   → （可选）images/*.png + images/manifest.json
-6. Agent 读 SKILL.md + 本模板，按第四节骨架写出 `<序号>-<主题>.md`
+5. Agent 读 SKILL.md + 本模板，按第四节骨架写出 `<序号>-<主题>.md`
    └ 时间索引条目写成 `+ [mm:ss] 标题`（不含 URL）
+6. （可选，带截图时）Agent 写 shots.json → bili_screenshot.py <meta> <txt> <img> --shots shots.json
+                                          → images/*.png + images/manifest.json，再把截图嵌入对应小节
 7. python scripts/note_nav.py <笔记.md> --template v4 --meta <metadata.json> --txt-dir <txt目录>
                                           → 原位填充时间索引深链（幂等）
 8. python scripts/validate_note.py <笔记.md> --template v4 --meta <metadata.json> --txt-dir <txt目录>
                                           → errors 必须为 0 才交付
-9. clean_media.py <输出目录>               → 交付后询问用户是否清理缓存媒体
+9. （可选，带截图时）upload_images.py <笔记.md> [--apply]
+                                          → 截图传 OSS 并改写为 OSS 链接，便于导入语雀
+10. clean_media.py <输出目录>              → 交付后询问用户是否清理缓存媒体
 ```
 
 **关键分工**：第 6 步的模型输出**不含任何 URL**；第 7 步的脚本只把 `视频时间索引`
@@ -292,10 +337,10 @@ graph TD
 | 代码块来源标注（可选） | 三 |
 | 引语块、目录、小节与核心思想 | 四 |
 | 概念卡片（出现：第 N 节「小节名」） | 5.1 |
-| 知识地图（mermaid graph TD） | 5.2 |
+| 知识地图（概念关系图：概念卡全覆盖、带标签关系边） | 5.2 |
 | 自测题（不折叠） | 5.3 |
 | 视频时间索引（不折叠、无 NAV 标记） | 5.4 |
-| 截图嵌入 | 七 |
+| 截图（shots.json 清单、所属小节、上传 OSS） | 七 |
 | 生成流程（note_nav / validate 带 --template v4） | 八 |
 
 ---
@@ -312,4 +357,4 @@ graph TD
 | 概念卡「出现」 | `2、5` | `第 2 节「小节名」、第 5 节「小节名」` |
 | 自测答案 | `<details>` 折叠 | 不折叠，空行后 `**答案：**` |
 | 时间导航 | `<details>` + NAV 标记 | 不折叠、无 NAV 标记，`+ [mm:ss](URL) 标题` |
-| 知识地图 | mermaid mindmap | mermaid graph TD（推荐） |
+| 知识地图 | mermaid mindmap | mermaid graph TD 概念关系图（subgraph 分组 + 带标签关系边） |

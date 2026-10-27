@@ -45,9 +45,14 @@ GOOD = """> 核心主线：用例是散落的珠子、活动图是串起它们�
 ```mermaid
 graph TD
   R((业务流程建模))
-  R --> G1[符号]
-  G1 --> L2[action]
-  R --> G3[颜色语义]
+  subgraph S1[从用例到活动图]
+    C1[活动图]
+  end
+  subgraph S2[颜色约定]
+    C2[颜色语义]
+  end
+  R --> C1
+  C1 -->|用颜色区分 action| C2
 ```
 
 ## 概念卡片
@@ -303,3 +308,119 @@ def test_knowledge_map_missing_mermaid_is_error(tmp_path):
 def test_unclosed_fence_is_error(tmp_path):
     r = run(tmp_path, GOOD + "\n```python\nprint(1)\n")  # 未闭合代码块
     assert errs(r, "V4-E7")  # 报错
+
+
+# ---------- V4-KM-REL：知识地图须为概念关系图 ----------
+
+OLD_TREE_MAP = """```mermaid
+graph TD
+  R((业务流程建模))
+  R --> G1[从用例到活动图]
+  R --> G2[活动图的颜色语义]
+```"""  # 典型“复刻目录”的树
+
+
+def _swap_map(new_map: str) -> str:
+    """把 GOOD 里的 mermaid 块整体替换为 new_map。"""
+    start = GOOD.index("```mermaid")  # 块起点
+    end = GOOD.index("```", start + 3) + 3  # 块终点
+    return GOOD[:start] + new_map + GOOD[end:]  # 拼接
+
+
+def test_km_rel_good_map_passes(tmp_path):
+    r = run(tmp_path)  # 合规样例
+    km = r["checks"]["knowledge_map_relations"]  # 关系检查明细
+    assert km["passed"] and km["labeled_edges"] == 1 and km["missing_concepts"] == []  # 通过
+
+
+def test_km_rel_toc_tree_is_error(tmp_path):
+    """目录树式地图：无带标签边 → error；节点等于小节名 → warning。"""
+    r = run(tmp_path, _swap_map(OLD_TREE_MAP))  # 换成目录树
+    msgs = " ".join(e["message"] for e in errs(r, "V4-KM-REL"))  # 汇总报错
+    assert "带标签的关系边" in msgs  # 缺关系边
+    assert warns(r, "V4-KM-REL")  # 复刻目录提示
+
+
+def test_km_rel_missing_concept_is_error(tmp_path):
+    m = """```mermaid
+graph TD
+  C1[活动图] -->|依赖| C3[action]
+```"""  # 缺“颜色语义”
+    r = run(tmp_path, _swap_map(m))  # 跑门禁
+    assert any("颜色语义" in e["message"] for e in errs(r, "V4-KM-REL"))  # 报缺失概念
+
+
+def test_km_rel_accepts_all_edge_label_styles(tmp_path):
+    """四种带标签写法都计数：-->|x|、-- x -->、-. x .->、== x ==>。"""
+    m = """```mermaid
+graph TD
+  C1[活动图] -->|依赖| C2[颜色语义]
+  C1 -- 包含 --> C3[action]
+  C2 -. 易混 .-> C1
+  C3 == 组成 ==> C1
+  C3 --> C2
+```"""  # 四条带标签 + 一条无标签
+    r = run(tmp_path, _swap_map(m))  # 跑门禁
+    km = r["checks"]["knowledge_map_relations"]  # 明细
+    assert km["labeled_edges"] == 4 and km["edges"] == 5  # 计数正确
+    assert not errs(r, "V4-KM-REL")  # 通过
+
+
+def test_km_rel_short_note_not_checked(tmp_path):
+    r = run(tmp_path, _swap_map(OLD_TREE_MAP), note_type="short")  # short 型
+    assert not errs(r, "V4-KM-REL")  # short 不强制
+
+
+# ---------- V4-SHOT：截图位置与重复 ----------
+
+def _with_images(tmp_path, text, manifest_frames):
+    """在样例目录里放截图与 manifest 后跑门禁。"""
+    img = tmp_path / "images"  # 截图目录
+    img.mkdir(exist_ok=True)  # 创建
+    for f in manifest_frames:  # 逐帧造文件
+        (img / f["file"]).write_bytes(b"png")  # 假 PNG
+    (img / "manifest.json").write_text(json.dumps({"frames": manifest_frames, "failed": []},
+                                                  ensure_ascii=False), encoding="utf-8")  # 写 manifest
+    return run(tmp_path, text)  # 跑门禁
+
+
+SHOT = {"file": "p13_s2_color.png", "page": 13, "section": 2, "keyword": "颜色约定",
+        "caption": "颜色约定", "t": 310, "qc": "ok"}  # 属于第 2 节的截图
+
+
+def test_shot_in_right_section_passes(tmp_path):
+    text = GOOD.replace("+ 颜色约定因人因公司而异", "![颜色约定](images/p13_s2_color.png)\n+ 颜色约定因人因公司而异")  # 放第 2 节
+    r = _with_images(tmp_path, text, [SHOT])  # 跑门禁
+    assert not warns(r, "V4-SHOT") and r["ok"], r["warnings"]  # 无提示
+
+
+def test_shot_in_wrong_section_warns(tmp_path):
+    text = GOOD.replace("+ 描述主参与者协作", "![颜色约定](images/p13_s2_color.png)\n+ 描述主参与者协作")  # 错放第 1 节
+    r = _with_images(tmp_path, text, [SHOT])  # 跑门禁
+    assert any("属于第 2 节" in w["message"] for w in warns(r, "V4-SHOT"))  # 提示放错
+
+
+def test_shot_in_structural_section_and_duplicate_warn(tmp_path):
+    text = GOOD.replace("+ 颜色约定因人因公司而异", "![颜色约定](images/p13_s2_color.png)\n+ 颜色约定因人因公司而异")  # 正确位置
+    text = text.replace("## 概念卡片\n", "## 概念卡片\n![颜色约定](images/p13_s2_color.png)\n")  # 又在概念卡片里引用一次
+    r = _with_images(tmp_path, text, [SHOT])  # 跑门禁
+    assert any("重复引用" in w["message"] for w in warns(r, "V4-SHOT"))  # 重复提示
+
+
+def test_shot_outside_body_section_warns(tmp_path):
+    text = GOOD.replace("## 概念卡片\n", "## 概念卡片\n![颜色约定](images/p13_s2_color.png)\n")  # 只放在概念卡片里
+    r = _with_images(tmp_path, text, [SHOT])  # 跑门禁
+    assert any("概念卡片" in w["message"] for w in warns(r, "V4-SHOT"))  # 提示应放正文
+
+
+def test_km_rel_concept_named_sections_not_toc(tmp_path):
+    """小节本身以概念命名（如「## 1. 活动图」）时，节点与小节同名不算复刻目录。"""
+    text = GOOD.replace("从用例到活动图", "活动图").replace("活动图的颜色语义", "颜色语义")  # 小节改成概念名
+    m = """```mermaid
+graph TD
+  C1[活动图] -->|用颜色区分| C2[颜色语义]
+```"""  # 节点即概念
+    start = text.index("```mermaid")  # 块起点
+    end = text.index("```", start + 3) + 3  # 块终点
+    r = run(tmp_path, text[:start] + m + text[end:])  # 跑门禁
+    assert not warns(r, "V4-KM-REL"), r["warnings"]  # 不提示复刻目录

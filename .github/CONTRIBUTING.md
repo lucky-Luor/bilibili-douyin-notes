@@ -59,8 +59,11 @@ ASR 术语纠错词表按「真实错法 → 正确写法」维护（`references
 
 ## 截图锚点（anchors.json）贡献方式
 
-`references/anchors.json` 按 `{页码: [[label, 中文说明, [正则...]], ...]}` 组织，
-用于按转写稿关键词定位抽帧时刻。新增锚点：
+截图首选 `bili_screenshot.py --shots shots.json` 清单模式（按小节给时刻与图注），
+锚点表只是没有清单时的兜底。`references/anchors.json` **按视频 ID 隔离**：
+`{视频ID: {页码: [[label, 中文说明, [正则...]], ...]}}`（B站用 bvid，其他平台用 metadata 的
+`video_id`；以 `_` 开头的键是说明/示例，不会被加载）。早期版本按页码全局共用，
+会让别的视频误中其他课程的关键词，现已废弃。新增锚点：
 
 1. 正则匹配的是**转写稿文本**，请先 grep 实际文稿确认 ASR 实际用词
    （如 @Component 常被转成 "art component"，权限 → "全线"）；

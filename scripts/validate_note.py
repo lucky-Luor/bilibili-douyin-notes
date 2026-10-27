@@ -1043,6 +1043,9 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
 #   V4-E7    未闭合 fence；代码块来源注释含时刻                             [error]
 #   V4-KM    lecture 缺知识地图或 mermaid 不合规                            [error]
 #   V4-KM-LABEL / V4-IMG / V4-MANIFEST / V4-RATIO 与 v3 同语义
+#   V4-KM-REL lecture 知识地图须为概念关系图：概念卡全部出现在节点中、带标签关系边
+#            ≥ 概念数-1 [error]；节点大面积等于小节标题（复刻目录）[warning]
+#   V4-SHOT  本地截图须放在正文编号小节内、与截图清单的 section 一致、不重复引用 [warning]
 
 V4_INDEX_HEADING = "视频时间索引"  # 时间索引小节标题关键词
 # V4-E2：时间索引条目「+ [mm:ss] 标题」，脚本填链后为「+ [mm:ss](URL) 标题」（兼容 - / *）
@@ -1110,6 +1113,103 @@ def parse_quiz_questions_v4(lines: list[str], start: int, end: int) -> list[dict
                 q["extra_lines"] += 1  # 计入答案超长
                 q["answer_raw"].append(line)  # 一并做时刻扫描
     return questions  # 返回全部题目
+
+
+# V4-KM-REL：带标签的边（关系），四种写法：A -->|依赖| B / A -- 依赖 --> B / A -. 易混 .-> B / A == 推出 ==> B
+V4_KM_EDGE_LABEL_RES = (
+    re.compile(r"(?:-->|---|-\.->|-\.-|==>|===)\s*\|[^|]+\|"),  # 箭头后 |标签|
+    re.compile(r"--\s+[^-|>\s][^|>]*?\s+-->"),  # -- 标签 -->
+    re.compile(r"-\.\s+[^|.][^|]*?\s+\.->"),  # -. 标签 .->
+    re.compile(r"==\s+[^|=][^|]*?\s+==>"),  # == 标签 ==>
+)
+V4_KM_EDGE_ANY_RE = re.compile(r"-->|---|-\.->|-\.-|\.->|==>|===")  # 任意边（含无标签）
+V4_KM_NODE_LABEL_RE = re.compile(r"[\[\(\{]+([^\[\]\(\)\{\}|]+?)[\]\)\}]+")  # 节点形状内的标签文本
+V4_KM_SUBGRAPH_RE = re.compile(r"^\s*subgraph\b")  # subgraph 分组行
+V4_KM_TOC_RATIO = 0.5  # 节点标签与小节标题重合占比 ≥ 此值视为“复刻目录”
+# V4-SHOT：笔记正文编号小节标题「## N. 名」
+V4_SEC_NUM_RE = re.compile(r"^##\s+(\d{1,2})\s*[.、．]\s*(.+?)\s*$")  # 组：节号/节名
+
+
+def v4_km_norm(s: str) -> str:
+    """知识地图比较用归一化：去括号注释、空白、引号，转小写。"""
+    return re.sub(r"[（(][^）)]*[）)]|\s|[“”\"'`]", "", s).lower()  # 去掉括号内容与杂字符
+
+
+def v4_parse_km(lines: list[str], start: int, end: int) -> dict:
+    """解析 [start,end) 内第一个 mermaid 块，返回节点标签、分组标题与边统计。
+
+    返回 {"labels": [节点标签], "subgraphs": [分组标题], "edges": 边数, "labeled_edges": 带标签边数}；
+    找不到 mermaid 块时各项为空 / 0。实现从简：按行正则识别，识别不了的行跳过。
+    """
+    out = {"labels": [], "subgraphs": [], "edges": 0, "labeled_edges": 0}  # 默认结果
+    i = start  # 扫描游标
+    while i < end and not (V2_FENCE_LANG_RE.match(lines[i])  # 找 mermaid 开 fence
+                           and V2_FENCE_LANG_RE.match(lines[i]).group(1).lower() == "mermaid"):  # 语言须为 mermaid
+        i += 1  # 下一行
+    if i >= end:  # 没有 mermaid 块
+        return out  # 空结果
+    j = i + 1  # 块内第一行
+    while j < end and not FENCE_RE.match(lines[j]):  # 找闭合 fence
+        line = lines[j].strip()  # 去首尾空白
+        j += 1  # 前进（放在前面，下面可以直接 continue）
+        if not line or line.startswith("%%") or V2_MERMAID_FIRST_RE.match(line) or line == "end":  # 空行/注释/图类型/分组结束
+            continue  # 跳过
+        if V4_KM_SUBGRAPH_RE.match(line):  # subgraph S1[分组名]
+            sm = V4_KM_NODE_LABEL_RE.search(line)  # 取分组标题
+            out["subgraphs"].append(sm.group(1).strip() if sm else line[8:].strip())  # 无方括号时取 subgraph 后的文本
+            continue  # 分组行不算节点
+        out["edges"] += len(V4_KM_EDGE_ANY_RE.findall(line))  # 统计边
+        out["labeled_edges"] += sum(len(r.findall(line)) for r in V4_KM_EDGE_LABEL_RES)  # 统计带标签边
+        bare = re.sub(r"\|[^|]*\|", " ", line)  # 去掉 |边标签|，避免被当成节点
+        out["labels"].extend(m.group(1).strip() for m in V4_KM_NODE_LABEL_RE.finditer(bare))  # 收集节点标签
+    return out  # 解析结果
+
+
+def v4_image_section_problems(lines: list[str], fence_state: list[bool],
+                              manifest_path: Path) -> list[tuple[int, str]]:
+    """V4-SHOT：本地截图的位置与重复检查，返回 [(行号, 问题描述)]。
+
+    - 截图必须放在正文编号小节（## N. 名）内，放在目录/知识地图/概念卡/自测/时间索引里为问题；
+    - manifest 里记录了 section（--shots 清单模式）的截图，须放在第 section 节；
+    - 同一张图被引用多次为问题。只看相对路径 images/ 下的图（网络图、OSS 链接不查）。
+    """
+    problems: list[tuple[int, str]] = []  # 问题列表
+    sec_of_file: dict[str, int] = {}  # 文件名 → manifest 记录的小节号
+    if manifest_path.exists():  # 有 manifest 才能校验小节号
+        try:  # 解析失败就只做位置与重复检查
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))  # 读 manifest
+            for f in (data.get("frames", []) if isinstance(data, dict) else []):  # 逐帧
+                if isinstance(f, dict) and f.get("file") and f.get("section") is not None:  # 只收有小节号的
+                    sec_of_file[f["file"]] = int(f["section"])  # 记录
+        except (OSError, ValueError, TypeError):  # 读取/解析/类型错误
+            sec_of_file = {}  # 放弃小节号校验
+    cur_num: int | None = None  # 当前所在编号小节（None = 不在正文小节）
+    cur_title = ""  # 当前 ## 标题（报错用）
+    seen: dict[str, int] = {}  # 图片路径 → 首次出现行号
+    for i, line in enumerate(lines):  # 逐行
+        if fence_state[i]:  # 代码块内不算
+            continue  # 跳过
+        hm = H2_RE.match(line)  # ## 标题
+        if hm:  # 进入新小节
+            nm = V4_SEC_NUM_RE.match(line)  # 是否编号小节
+            cur_num = int(nm.group(1)) if nm else None  # 记录节号
+            cur_title = hm.group(1).strip()  # 记录标题
+            continue  # 标题行处理完
+        for m in IMG_MD_RE.finditer(line):  # 行内每张图
+            path = m.group(2).replace("\\", "/")  # 统一分隔符
+            if re.match(r"^https?://", path) or not path.startswith("images/"):  # 只查本地截图
+                continue  # 跳过
+            if path in seen:  # 重复引用
+                problems.append((i + 1, f"截图 {path} 重复引用（首次在第{seen[path]}行）"))  # 记录
+                continue  # 不再查位置
+            seen[path] = i + 1  # 登记首次出现
+            if cur_num is None:  # 不在正文编号小节
+                problems.append((i + 1, f"截图 {path} 放在「{cur_title or '开头'}」里，应放进它佐证的正文小节"))  # 记录
+                continue  # 不再查小节号
+            want = sec_of_file.get(path.split("/", 1)[1])  # manifest 记录的小节号
+            if want is not None and want != cur_num:  # 放错小节
+                problems.append((i + 1, f"截图 {path} 按截图清单属于第 {want} 节，实际放在第 {cur_num} 节"))  # 记录
+    return problems  # 返回
 
 
 def check_note_v4(text: str, note_path: Path, meta_path: Path | None,
@@ -1504,6 +1604,30 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,
                 err("V4-KM", f"知识地图 mermaid 块校验失败：{p}")  # 报错
             checks["knowledge_map"] = {"passed": blocks > 0 and not problems,
                                        "mermaid_blocks": blocks, "problems": problems}  # 明细
+            if blocks > 0 and not problems:  # 语法合规才查内容关系
+                km = v4_parse_km(lines, km_head + 1, next_h2_after(lines, km_head + 1))  # 解析地图
+                norm_labels = [v4_km_norm(l) for l in km["labels"] if l.strip()]  # 归一化节点标签
+                missing = [c for c in sorted(card_names)  # 概念卡里有、地图里没有的概念
+                           if not any(v4_km_norm(c) in nl or (len(nl) >= 2 and nl in v4_km_norm(c))
+                                      for nl in norm_labels)]  # 互相包含即视为覆盖
+                for c in missing:  # 逐个报告
+                    err("V4-KM-REL", f"概念卡片「{c}」没有出现在知识地图节点中（地图应以概念卡为节点）")  # 报错
+                need_edges = max(1, len(card_names) - 1)  # 带标签边下限：概念数 - 1
+                if km["labeled_edges"] < need_edges:  # 关系太少
+                    err("V4-KM-REL", f"知识地图只有 {km['labeled_edges']} 条带标签的关系边，至少需要 {need_edges} 条"
+                                     "（写法 A -->|依赖| B、A -.->|易混| B；地图要表达概念之间的关系，不是目录树）")  # 报错
+                sec_norm = {v4_km_norm(v3_norm_title(t)) for t, _ in sections  # 正文小节名（归一化）
+                            if t and not any(k in t for k in V3_IDEA_SKIP)}  # 去结构性小节
+                card_norm = {v4_km_norm(c) for c in card_names}  # 概念卡名（归一化）
+                toc_hits = sum(1 for nl in norm_labels if nl in sec_norm and nl not in card_norm)  # 等于小节名、又不是概念卡的节点数（小节本就以概念命名时不算复刻）
+                if norm_labels and sec_norm and toc_hits >= max(2, V4_KM_TOC_RATIO * len(sec_norm)):  # 大面积重合
+                    warn("V4-KM-REL", f"知识地图有 {toc_hits} 个节点与正文小节标题相同，像是在复刻目录；"
+                                      "小节名请放在 subgraph 分组标题上，节点用概念")  # 提示
+                checks["knowledge_map_relations"] = {
+                    "passed": not missing and km["labeled_edges"] >= need_edges,  # 是否通过
+                    "concepts": len(card_names), "missing_concepts": missing,  # 概念覆盖
+                    "edges": km["edges"], "labeled_edges": km["labeled_edges"],  # 边统计
+                    "subgraphs": len(km["subgraphs"]), "toc_like_nodes": toc_hits}  # 分组与目录重合
     else:  # short 可省
         checks["knowledge_map"] = {"passed": None, "note": "short 型知识地图可省（不检查）"}  # 明细
 
@@ -1527,6 +1651,14 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,
         err("V4-IMG", f"引用的图片不存在：{p}")  # 报错
     checks["images"] = {"passed": not missing_imgs, "checked": len(referenced),
                         "missing": missing_imgs}  # 明细
+
+    # ---- V4-SHOT：截图位置（所属小节）与重复引用 [warning] ----
+    shot_problems = v4_image_section_problems(
+        lines, fence_state, note_path.parent / "images" / "manifest.json")  # 位置与重复检查
+    for ln, msg in shot_problems:  # 逐个报告
+        warn("V4-SHOT", f"{msg}（第{ln}行）", ln)  # 提示
+    checks["image_sections"] = {"passed": not shot_problems,
+                                "lines": [ln for ln, _ in shot_problems]}  # 明细
 
     # ---- V4-MANIFEST：manifest 图注关键词交叉校验 [warning] ----
     im = check_image_manifest(note_path, note_path.parent / "images" / "manifest.json")  # 复用

@@ -20,11 +20,11 @@ description: 把B站/抖音/YouTube/小红书视频整理成Markdown课堂笔记
 ## 工具位置
 
 - 脚本目录：本 skill 安装目录下的 `scripts/`（命令中的 `<skill安装目录>` 占位符请替换为本 skill 实际安装路径）
-- 配置文件：本 skill 安装目录下的 `config.json`（存放 SESSDATA）
+- 配置文件：本 skill 安装目录下的 `config.json`（存放 SESSDATA；截图上传语雀用的 OSS 配置写在 `oss` 字段）
 - 参考资产：
   - `references/note-template.md` —— 课堂笔记模板 v4（语雀直导版式：骨架、要点表达、语法契约、时间戳规范）
   - `references/asr-glossary.json` —— ASR 术语纠错词表（真实错法→正确写法）
-  - `references/anchors.json` —— 截图锚点关键词表（按分P，可按需补充）
+  - `references/anchors.json` —— 截图关键词锚点表（按视频 ID 隔离；仅在不用 `--shots` 清单时兜底）
 
 ## 工作流程
 
@@ -84,24 +84,40 @@ python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-not
 - 首次运行会下载模型（small≈480MB，自动走 hf-mirror.com 镜像）。
 - ASR 文稿没有标点分段质量保证，技术术语常被转错——生成笔记前用 `references/asr-glossary.json` 词表对照校正（见第三步第2条）。
 
-### 第二步半（可选）：抽取重点截图
+### 第二步半（可选，只在用户要“带截图”时做）：抽取重点截图
 
-用户需要"带截图的笔记"时，用脚本按转写稿时间戳自动抽取重点画面：
+用户没提截图就跳过本步。要截图时，**先完成第三步的正文，再回来按小节定截图**——
+截什么由理解了内容的 Agent 决定，脚本只负责按清单抽帧：
 
-```bash
-# 全部分P（B站查 references/anchors.json 锚点表，抖音/无锚点页自动提取关键词）
-python "<skill安装目录>/scripts/bili_screenshot.py" "<工作目录>/metadata.json" "<工作目录>" "<工作目录>/images"
+1. 正文写完后，为需要画面佐证的小节（PPT 关键页、架构图、代码演示、对比表）写截图清单
+   `<工作目录>/shots.json`，每小节 0~2 张、宁缺毋滥：
+   ```json
+   {"shots": [
+     {"page": 1, "section": 2, "t": "05:12", "caption": "开闭原则两层含义", "name": "two-meanings"}
+   ]}
+   ```
+   `page` 分P号、`section` 笔记 `## N.` 小节号、`t` 该分P**转写稿里真实存在的时刻**
+   （先 grep 确认；不在转写稿 ±5s 内的条目会被脚本拒绝，进 `failed`，reason=`t_not_in_transcript`）、
+   `caption` 图注、`name` 文件名（可选，缺省用 caption）。
+2. 按清单抽帧：
+   ```bash
+   python "<skill安装目录>/scripts/bili_screenshot.py" "<工作目录>/metadata.json" "<工作目录>" "<工作目录>/images" --shots "<工作目录>/shots.json"
+   ```
+   输出 `images/p<页>_s<小节>_<name>.png` + `images/manifest.json`（记录 section）。
+3. **逐张看图**（视觉复核）：画面与 caption 不符、是讲师脸或过渡帧 → 调整 `t` 重跑或删掉该条；
+   再把截图以 `![<caption>](images/xxx.png)` 嵌入**清单里写的那个小节**、它佐证的要点旁边。
 
-# 只抽指定分P（逗号分隔页码）
-python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <images目录> 2,6,11
-```
-
-- B站：在转写稿里搜每分P"锚点关键词"（如 @Component、循环依赖、log4j），取首次出现时间-3s（ASR滞后），下载 480p DASH 视频抽帧后即删；锚点表外置在 `references/anchors.json`，该文件没有的页码（或抖音平台）自动用 `auto_anchors()` 从转写稿提取中英文关键词；
-- 抖音：直接复用第一步下载的本地视频抽帧，不再联网；
-- 未登录最高 480p（852×480），够看清 PPT/代码；填了 SESSDATA 会自动取更高画质；
-- **画质 QC**：脚本内置本地画质初筛，亮度用**像素占比法**（近黑像素占比>97% 判 dark，近白像素占比>98.5% 判 bright——白底 PPT 少量文字不会误判为空屏），清晰度用灰度拉普拉斯方差（<10 判 blurry）；非 ok 帧自动 +30s 重抽一次并标记（进度 JSON 里每帧 `qc` 字段：`ok`=合格，`dark`/`bright`/`blurry`=重抽后仍未通过的原因；取不到帧的锚点进 `failed` 列表，status 变 `partial`）。Agent 生成笔记时对非 `ok` 帧复核（视觉识别）决定是否采用；
-- 锚点未命中时先 grep 转写稿找 ASR 实际用词（对照 `references/asr-glossary.json`，如"权限"被转成"全线"、@Component→"art component"、Starter→"Stutter"）再补正则；
-- 生成笔记时以 `![说明](images/pXX_yyy.png)` 相对路径嵌入对应小节；锚点文件名**默认可中文**，需要 ASCII 文件名时给脚本加 `--ascii-names`（中文 label 自动转为 `zh-<md5前6位>`）。
+脚本行为：
+- **多帧择优**：每个时刻向后取 3 张候选（间隔 4s），优先画质合格帧，再挑与相邻候选差异最小
+  （画面已静止，避开 PPT 翻页过渡）的一张；
+- **去重**：同一分P里与已选截图是同一画面（感知哈希接近且像素差小）的不落盘，记入进度 JSON 的 `duplicates`；
+- **画质 QC**：亮度用像素占比法（近黑>97% 判 dark、近白>98.5% 判 bright——白底 PPT 不会误判），
+  清晰度用拉普拉斯方差（<10 判 blurry）；每帧 `qc` 字段非 `ok` 时由 Agent 视觉复核决定是否采用；
+- B站下载 480p DASH 视频抽帧后即删（填了 SESSDATA 自动取更高画质）；抖音 / 小红书复用本地视频不联网；
+- **不给 `--shots` 时**退回关键词锚点：查 `references/anchors.json` 中**本视频 ID** 的条目
+  （按视频隔离，别的课程的锚点不会串用），没有就用 `auto_anchors()` 从转写稿提取高频词——
+  这种方式与小节无关、定位粗糙，仅作兜底；
+- 截图文件名默认可中文；需要 ASCII 文件名时加 `--ascii-names`。
 
 ### 第三步：生成课堂笔记
 
@@ -122,7 +138,7 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
    - **代码块**：真实语言 fence；来源标注可选——来自克隆仓库写 `# 来源：仓库 <子项目>/<文件路径>`（注释符随语言），按视频讲解组织的可写 `# 按视频讲解还原` 或不写；任何代码块内禁时刻；
    - **概念卡片**：`### 概念名`（禁标签后缀）+ `+ 定义：` / `+ 出现：` / `+ 依赖：` / `+ 易混：` 四行；`出现` 写作 `第 N 节「小节名」、第 M 节「小节名」`（≥2 个小节，节名与正文小节标题一致），禁时刻；
    - **自测题（不折叠）**：`N. <题干>？（对应：概念名）`（概念必须在概念卡片集合内：lecture 必须、short 可选），空一行后直接写 `**答案：** <至多一行>`，**不用 `<details>`**，禁时刻；lecture 4~7 道（short 2~3 道）；选题主打高频原理与面试易错点，禁 yes/no 题干；
-   - **mermaid 知识地图**：` ```mermaid ` 代码块，推荐 `graph TD`（`R((主题))` 为根，`R --> G1[分组]`），节点标签禁半角 ( ) [ ] { } 与引号、≤12 字（需要括号用全角）；导入语雀后自动渲染为图；
+   - **mermaid 知识地图 = 概念关系图，不是目录树**：` ```mermaid ` 代码块，推荐 `graph TD`；`R((主题))` 为根，**节点用概念卡片里的概念**（每张概念卡都要出现），小节名放在 `subgraph S1[分组名]` 标题上而不是当节点；**边带关系标签**表达概念之间怎么关联——`A -->|依赖| B`、`A -->|推出| B`、`A -->|组成| B`、`A -.->|易混| B`，lecture 带标签边 ≥ 概念卡数 − 1，关系尽量与概念卡「依赖 / 易混」一致；节点标签禁半角 ( ) [ ] { } 与引号、≤12 字（需要括号用全角）；导入语雀后自动渲染为图；
    - **视频时间索引**：文末最后一节，前接 `---`，**不折叠、不写 NAV 标记**；模型只写条目 `+ [mm:ss] <与正文一级小节同名>`（一级章节一条），**不写 URL**；时刻必须取自转写稿真实时间行（允许 ±5s 内小幅前移，禁止虚构）；lecture 必须有本节，short 可整体省略。
 5. 笔记中引用的代码/命令必须以视频文稿内容为准；文稿未讲到的细节不要编造，可标注"（视频中未展开，建议补充）"。若视频简介里有代码仓库，克隆下来读取源码，把笔记中的代码示例换成仓库中的真实代码（首选做法）。
 6. **填充时间索引深链（v4 笔记默认执行）**：
@@ -131,7 +147,13 @@ python "<skill安装目录>/scripts/bili_screenshot.py" <meta> <txt目录> <imag
 7. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --template v4 --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
    （每个选集单独一份笔记时加 `--page <分P号>`）errors 必须为 0 才交付；warnings 酌情处理（如精简篇幅）。没有 frontmatter 的笔记默认按 v4 检查（`--template v4` 可省略）；v4 下出现 frontmatter / 一级标题、正文时刻、标签残留、`<details>` 折叠或 NAV 标记、时间索引缺失（lecture）、自测数量越界、概念卡「出现」格式非法等均为 error。frontmatter 写 `template_version: v3` 的老笔记按 v3 规则检查；写 v1 / v2 或缺版本号会直接报 `VERSION` 错误（v1 / v2 规则已移除）。报告 JSON 的 `errors` / `warnings` 为**对象数组**（每项含 `check` 检查编号与 `line` 行号）。
-8. **媒体清理（交付后必问用户）**：若输出目录存在缓存媒体（抖音的 `media_p01.mp4` 等本地视频，或残留的 `.part`/`.audio_*`/`.video_*` 临时文件），**询问用户「是否清理缓存的视频/音频文件？重新做笔记会重新下载」**：确认 → 先跑
+8. **截图上传 OSS（仅带截图的笔记）**：语雀导入 Markdown 不会上传本地图片，交付前先预演
+   `python "<skill安装目录>/scripts/upload_images.py" "<笔记.md>"`（列出将上传的图片与目标 OSS 链接，不联网不改文件），
+   确认后加 `--apply`：按内容哈希命名上传（远端已有则跳过，可重复执行），再把笔记里的 `images/...` 原位改写为 OSS 链接（留 `.bak` 备份）。
+   OSS 配置读 `config.json` 的 `oss` 字段或环境变量 `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_PREFIX / OSS_PUBLIC_BASE_URL`
+   （也可 `--env-file <xxx.env>`）；Bucket 需公共读或经 CDN 可公开访问。**门禁要在上传前跑**（上传后图片是网络链接，位置与图注校验会跳过）；
+   缺配置时脚本只列出缺哪些键，不要向用户索要密钥明文，让用户自己填进 config.json 或环境变量。
+9. **媒体清理（交付后必问用户）**：若输出目录存在缓存媒体（抖音的 `media_p01.mp4` 等本地视频，或残留的 `.part`/`.audio_*`/`.video_*` 临时文件），**询问用户「是否清理缓存的视频/音频文件？重新做笔记会重新下载」**：确认 → 先跑
    `python "<skill安装目录>/scripts/clean_media.py" "<输出目录>"`
    把将删除的清单给用户过目，再执行 `--apply` 实删；拒绝 → 跳过并说明缓存保留的意义（重跑截图/转写不再联网）。B站的临时音频/视频在流程中已自动删除，通常无残留。
 
@@ -145,8 +167,8 @@ lecture 完整骨架、时间戳规范、语法契约、short 差异表、截图
 > 核心主线：<一句话知识主线>       # 文件第一行；无 frontmatter、无 # 标题（文件名 <序号>-<主题>.md 即标题）
 > 课程来源：<视频标题等>          # 有仓库再加 > 课程代码：<仓库地址>
 ## 目录              # + [N. 小节名](#锚点) 不带时刻；末尾固定列出 本讲知识地图 / 概念卡片 / 自测题（复习用）/ 视频时间索引
-## N. 小节名 ×N      # 下一行紧接 **核心思想：** <一句话> + `+` 要点列表（术语加粗）+ 代码块 / 对比表格 + 截图
-## 本讲知识地图      # mermaid graph TD 代码块
+## N. 小节名 ×N      # 下一行紧接 **核心思想：** <一句话> + `+` 要点列表（术语加粗）+ 代码块 / 对比表格 +（带截图时）本节截图
+## 本讲知识地图      # mermaid graph TD 概念关系图：节点=概念卡，subgraph 分组，边带关系标签
 ## 概念卡片          # ### <概念名>：+ 定义 / + 出现：第 N 节「小节名」 / + 依赖 / + 易混
 ## 自测题（复习用）  # 不折叠：题干后空一行写 **答案：**，lecture 4~7 道 / short 2~3 道
 ---
