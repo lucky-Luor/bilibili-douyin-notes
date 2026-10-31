@@ -68,6 +68,9 @@ This skill follows the **Agent Skills spec** (`SKILL.md`) and works with any com
 - `~/.zcode/skills/` — ZCode
 - `~/.agents/skills/` — shared skills path for Codex and other agents
 
+> 🧩 **DeepSeek Harness (DSH) users**: install the plugin edition [dsh-video-notes](https://github.com/lucky-Luor/dsh-video-notes) with one command and get updates with the plugin:
+> `npx -y @deepseek-ai/dsh plugin --profile web add github:lucky-Luor/dsh-video-notes`
+
 ```bash
 # 1. Clone into your agent's skills directory
 git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.claude/skills/bilibili-douyin-notes

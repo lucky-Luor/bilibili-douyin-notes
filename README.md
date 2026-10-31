@@ -84,6 +84,9 @@ git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.claude/skil
 
 其他兼容 Agent 放入其各自的 skills 目录即可。
 
+> 🧩 **DeepSeek Harness（DSH）用户**：推荐安装插件版 [dsh-video-notes](https://github.com/lucky-Luor/dsh-video-notes)，一条命令装好，随插件升级：
+> `npx -y @deepseek-ai/dsh plugin --profile web add github:lucky-Luor/dsh-video-notes`
+
 ```bash
 # 1. 克隆到你的 agent 的 skills 目录（以 ZCode 为例）
 git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.zcode/skills/bilibili-douyin-notes
