@@ -24,9 +24,10 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
+
+import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
+from _hints import failure_record  # 单集失败的结构化提示
 
 # 国内网络默认走 HF 镜像；必须在 import huggingface 相关模块之前设置
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -45,21 +46,9 @@ def load_sessdata() -> str:
 
 
 def http_get(url: str, cookie: str = "", retries: int = 3) -> bytes:
-    """带重试的 GET：网络类错误按 1s/2s 退避重试，与 bili_fetch 侧对称。"""
-    headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
-    if cookie:
-        headers["Cookie"] = f"SESSDATA={cookie}"
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            last_exc = e
-            if attempt < retries - 1:
-                time.sleep(attempt + 1)
-    raise last_exc
+    """带重试的 GET（实现见 _net.http_get）：只对网络类错误重试，HTTP 4xx 直接给出原因和下一步。"""
+    return _net.http_get(url, _net.bili_headers(cookie), retries=retries,  # 4xx 不重试，失败给三段式提示
+                         platform="bilibili", impact="这一集无法下载音频，不能语音识别")
 
 
 def safe_name(name: str) -> str:
@@ -82,12 +71,8 @@ def download_audio(bvid: str, cid: int, dest: Path, cookie: str = "") -> Path:
     audios = data["data"]["dash"]["audio"]
     best = min(audios, key=lambda a: a["bandwidth"])  # 做笔记无需高音质，越小越快
     audio_url = best["baseUrl"] or best["base_url"]
-    req = urllib.request.Request(audio_url, headers={
-        "User-Agent": UA, "Referer": "https://www.bilibili.com/",
-        **({"Cookie": f"SESSDATA={cookie}"} if cookie else {})})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
-        while chunk := resp.read(1 << 20):
-            f.write(chunk)
+    _net.download_to(audio_url, _net.bili_headers(cookie), dest,  # 流式下载；4xx / 断线转成三段式提示
+                     platform="bilibili", impact="这一集无法下载音频，不能语音识别")
     return dest
 
 
@@ -326,8 +311,10 @@ def main():
                               "fallback_reasons": state.get("fallback_reasons", []),
                               "status": "ok"}, ensure_ascii=True), flush=True)
         except Exception as e:
+            rec = failure_record(e, "这一集没有转写稿，笔记会缺这一集",  # 结构化的原因 / 影响 / 下一步
+                                 f'python "{Path(__file__).resolve()}" "{args.meta}" --page {p["page"]}')  # 只补跑这一集
             print(json.dumps({"page": p["page"], "part": p["part"],
-                              "status": "error", "error": str(e)},
+                              "status": "error", **rec},  # error 字段保留，另附三段字段
                              ensure_ascii=True), flush=True)
         finally:
             if str(audio) == str(outdir / f".audio_{p['page']:02d}.m4s"):

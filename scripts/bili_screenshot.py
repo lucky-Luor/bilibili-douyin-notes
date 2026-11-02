@@ -67,9 +67,10 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
+
+import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
+from _hints import failure_record  # 单集失败的结构化提示
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -148,21 +149,9 @@ def load_sessdata() -> str:
 
 
 def http_get(url: str, cookie: str = "", retries: int = HTTP_RETRIES) -> bytes:
-    """带重试的 GET：网络类错误按 1s/2s 退避重试（与 bili_fetch.py 相同模式）。"""
-    headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
-    if cookie:
-        headers["Cookie"] = f"SESSDATA={cookie}"
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            last_exc = e
-            if attempt < retries - 1:
-                time.sleep(attempt + 1)
-    raise last_exc
+    """带重试的 GET（实现见 _net.http_get）：只对网络类错误重试，HTTP 4xx 直接给出原因和下一步。"""
+    return _net.http_get(url, _net.bili_headers(cookie), retries=retries,  # 4xx 不重试，失败给三段式提示
+                         platform="bilibili", impact="这一集没有截图，笔记照常生成")
 
 
 def parse_ts_seconds(text: str) -> list[tuple[float, str]]:
@@ -279,12 +268,8 @@ def download_video(bvid: str, cid: int, dest: Path, cookie: str = "") -> Path:
             f"playurl 响应缺少 dash.video 字段（bvid={bvid} cid={cid}，"
             "可能未登录无 DASH 流权限）") from e
     best = max(videos, key=lambda v: v["id"])  # 未登录最高480p
-    req = urllib.request.Request(best["baseUrl"] or best["base_url"], headers={
-        "User-Agent": UA, "Referer": "https://www.bilibili.com/",
-        **({"Cookie": f"SESSDATA={cookie}"} if cookie else {})})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
-        while chunk := resp.read(1 << 20):
-            f.write(chunk)
+    _net.download_to(best["baseUrl"] or best["base_url"], _net.bili_headers(cookie), dest,  # 流式下载；4xx / 断线转成三段式提示
+                     platform="bilibili", impact="这一集没有截图，笔记照常生成")
     return dest
 
 
@@ -596,7 +581,10 @@ def main(argv=None):
                                   "failed": failed, "duplicates": dups, "status": status},
                                  ensure_ascii=True), flush=True)
             except Exception as e:
-                print(json.dumps({"page": page_no, "status": "error", "error": str(e)},
+                rec = failure_record(e, "这一集没有截图，笔记照常生成",  # 结构化的原因 / 影响 / 下一步
+                                     f'python "{Path(__file__).resolve()}" "{meta_path}" "{txt_dir}" "{img_dir}" {page_no}'  # 只补跑这一集
+                                     + (f' --shots "{args.shots}"' if args.shots else ""))  # 清单模式带上清单
+                print(json.dumps({"page": page_no, "status": "error", **rec},  # error 字段保留，另附三段字段
                                  ensure_ascii=True), flush=True)
             finally:
                 if video is not local_media:

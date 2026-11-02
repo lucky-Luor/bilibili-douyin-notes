@@ -95,3 +95,18 @@ def explain_douyin_filter(data: dict, impact: str = "") -> HintError:  # 抖音�
     return HintError("抖音详情接口没有返回作品数据，多半是签名算法已被平台升级", impact,  # 真正的签名失效
                      "按 README「已知限制」更新 abogus.py，或提 issue 告诉维护者",
                      str(data)[:300])  # 原始响应作为详情
+
+
+def failure_record(exc: Exception, impact: str, rerun: str = "") -> dict:  # 单集失败 → 进度 JSON 里的结构化字段
+    """保留原有 error 字段（兼容旧的解析方式），另附 reason / impact / next_step，交付回执可直接引用。"""
+    if isinstance(exc, HintError):  # 已经是三段式
+        reason, next_step, detail = exc.reason, exc.next_step, exc.detail  # 直接沿用
+        impact = exc.impact or impact  # 抛出处给的影响优先
+    else:  # 普通异常：原因取首行，下一步给通用建议
+        reason = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:200]  # 首行原文
+        next_step, detail = "按补跑命令重试这一集；仍失败请提 issue 附上这段提示", type(exc).__name__  # 通用建议
+    if rerun:  # 有补跑命令
+        next_step = f"{next_step}；补跑：{rerun}"  # 附在下一步末尾
+    return {"error": format_hint(reason, impact, next_step, detail),  # 兼容字段：完整三段文案
+            "reason": reason, "impact": impact or DEFAULT_IMPACT,  # 原因与影响
+            "next_step": next_step, "rerun": rerun}  # 下一步与补跑命令
