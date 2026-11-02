@@ -7,6 +7,7 @@
 #   小红书流程（第1步）:    无额外依赖（纯标准库）
 #   B站扫码登录:            qrcode pillow（生成二维码 PNG 图片；ASCII 仅为兜底）
 #   截图画质初筛:           numpy pillow
+#   截图上传 OSS（可选）:   oss2（scripts/upload_images.py --apply 时才需要）
 # 开发/测试依赖见 requirements-dev.txt
 faster-whisper
 ctranslate2
@@ -17,3 +18,4 @@ pillow
 qrcode
 yt-dlp>=2026.8.19
 youtube-transcript-api>=1.2.0
+oss2

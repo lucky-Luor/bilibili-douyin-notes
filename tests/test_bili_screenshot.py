@@ -159,7 +159,7 @@ def _run_main(tmp_path, monkeypatch, capsys, old_manifest=None):
         (img_dir / "manifest.json").write_text(
             json.dumps(old_manifest, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(bili_screenshot, "load_anchors",
-                        lambda: {1: [("循环依赖", "循环依赖的图示", ["循环依赖"])]})
+                        lambda vid=None: {1: [("循环依赖", "循环依赖的图示", ["循环依赖"])]})
     monkeypatch.setattr(bili_screenshot, "load_sessdata", lambda: "")
     monkeypatch.setattr(bili_screenshot, "download_video",
                         lambda bvid, cid, dest, cookie="": dest.write_bytes(b"fake") or dest)
@@ -195,7 +195,7 @@ def test_main_keyword_keeps_original_with_ascii_names(tmp_path, monkeypatch, cap
     img_dir = tmp_path / "images"
     img_dir.mkdir()
     monkeypatch.setattr(bili_screenshot, "load_anchors",
-                        lambda: {1: [("循环依赖", "循环依赖的图示", ["循环依赖"])]})
+                        lambda vid=None: {1: [("循环依赖", "循环依赖的图示", ["循环依赖"])]})
     monkeypatch.setattr(bili_screenshot, "load_sessdata", lambda: "")
     monkeypatch.setattr(bili_screenshot, "download_video",
                         lambda bvid, cid, dest, cookie="": dest.write_bytes(b"fake") or dest)
@@ -238,3 +238,119 @@ def test_write_manifest_keeps_files_when_page_untouched(tmp_path):
     bili_screenshot.write_manifest(tmp_path, [{"file": "b.png", "page": 1}],
                                    [], touched={1})
     assert (tmp_path / "a.png").exists()
+
+
+# ---------- 锚点表按视频隔离 / 截图清单 / 多帧择优 / 去重 ----------
+
+def test_load_anchors_only_returns_current_video(tmp_path, monkeypatch):
+    """锚点表按视频 ID 隔离：别的视频、以 _ 开头的示例键都不会被加载。"""
+    table = {"_示例": {"1": [["x", "示例", ["删"]]]},  # 示例键应被忽略
+             "BV1aaaaaaaaa": {"2": [["a", "说明A", ["循环"]]]}}  # 另一个视频
+    path = tmp_path / "anchors.json"  # 临时锚点表
+    path.write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")  # 写入
+    monkeypatch.setattr(bili_screenshot, "ANCHORS_PATH", path)  # 指向临时表
+    assert bili_screenshot.load_anchors("BV1bbbbbbbbb") == {}  # 别的视频：空表，不串课
+    assert bili_screenshot.load_anchors("_示例") == {}  # 示例键不可被当成视频
+    assert bili_screenshot.load_anchors(None) == {}  # 无视频 ID：空表
+    assert bili_screenshot.load_anchors("BV1aaaaaaaaa") == {2: [("a", "说明A", ["循环"])]}  # 本视频命中
+
+
+def test_parse_mmss():
+    assert bili_screenshot.parse_mmss("05:12") == 312.0  # mm:ss
+    assert bili_screenshot.parse_mmss("1:00:05") == 3605.0  # h:mm:ss
+    assert bili_screenshot.parse_mmss("5分12秒") is None  # 非法格式
+    assert bili_screenshot.parse_mmss("") is None  # 空串
+
+
+def _patterned(seed: int):
+    """生成一张测试“幻灯片”：seed 不同 → 黑块位置不同（画面明显不同）。"""
+    import PIL.Image, PIL.ImageDraw  # 惰性导入
+    img = PIL.Image.new("RGB", (160, 90), "white")  # 白底 16:9
+    d = PIL.ImageDraw.Draw(img)  # 画笔
+    x0, y0 = (seed * 37) % 120, (seed * 23) % 60  # 黑块位置随 seed 变化
+    d.rectangle([x0, y0, x0 + 40, y0 + 30], fill="black")  # 主体黑块
+    d.rectangle([0, 80, 159, 84], fill="gray")  # 共同的页脚条（模拟同一 PPT 模板）
+    return img  # 返回图片
+
+
+def _run_shots(tmp_path, monkeypatch, capsys, shots, txt, frame_for):
+    """清单模式跑 main()：frame_for(t) 决定每个抽帧时刻返回的图片。"""
+    meta = {"bvid": "BV1xx411c7mD",
+            "pages": [{"page": 1, "part": "P1", "cid": 1, "duration": 600}]}  # 单P元数据
+    (tmp_path / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")  # 写 meta
+    txt_dir = tmp_path / "txt"  # 转写稿目录
+    txt_dir.mkdir()  # 创建
+    (txt_dir / "01_P1.txt").write_text(txt, encoding="utf-8")  # 写转写稿
+    img_dir = tmp_path / "images"  # 截图目录
+    shots_path = tmp_path / "shots.json"  # 清单路径
+    shots_path.write_text(json.dumps({"shots": shots}, ensure_ascii=False), encoding="utf-8")  # 写清单
+    monkeypatch.setattr(bili_screenshot, "load_anchors",
+                        lambda vid=None: pytest.fail("清单模式不应查锚点表"))  # 清单模式不查锚点
+    monkeypatch.setattr(bili_screenshot, "load_sessdata", lambda: "")  # 无登录
+    monkeypatch.setattr(bili_screenshot, "download_video",
+                        lambda bvid, cid, dest, cookie="": dest.write_bytes(b"fake") or dest)  # 假下载
+    monkeypatch.setattr(bili_screenshot, "grab_frames",
+                        lambda video, times: [frame_for(t) for t in times])  # 按时刻给图
+    bili_screenshot.main([str(tmp_path / "metadata.json"), str(txt_dir), str(img_dir),
+                          "--shots", str(shots_path)])  # 跑清单模式
+    manifest = json.loads((img_dir / "manifest.json").read_text(encoding="utf-8"))  # 读 manifest
+    last = json.loads(capsys.readouterr().out.strip().splitlines()[-1])  # 末行进度
+    return img_dir, manifest, last  # 返回
+
+
+def test_shots_mode_writes_section_and_caption(tmp_path, monkeypatch, capsys):
+    """清单模式：文件名带小节号，manifest 记录 section，keyword 等于 caption。"""
+    img_dir, manifest, last = _run_shots(
+        tmp_path, monkeypatch, capsys,
+        shots=[{"page": 1, "section": 2, "t": "01:00", "caption": "开闭原则两层含义", "name": "two"}],
+        txt="[00:58] 开闭原则有两层含义\n", frame_for=lambda t: _patterned(1))  # 一条清单项
+    f = manifest["frames"][0]  # 唯一一帧
+    assert f["file"] == "p01_s2_two.png" and (img_dir / f["file"]).exists()  # 文件名与落盘
+    assert f["section"] == 2 and f["keyword"] == f["caption"] == "开闭原则两层含义"  # 小节与图注
+    assert last["status"] == "ok" and last["duplicates"] == []  # 进度
+
+
+def test_shots_mode_rejects_invented_timestamp(tmp_path, monkeypatch, capsys):
+    """清单时刻不在转写稿 ±5s 内：不抽帧，进 failed（reason=t_not_in_transcript）。"""
+    _, manifest, last = _run_shots(
+        tmp_path, monkeypatch, capsys,
+        shots=[{"page": 1, "section": 1, "t": "09:00", "caption": "虚构时刻"}],
+        txt="[00:10] 开场\n", frame_for=lambda t: _patterned(1))  # 09:00 转写稿里没有
+    assert manifest["frames"] == []  # 没有截图
+    assert last["failed"][0]["reason"] == "t_not_in_transcript"  # 原因明确
+    assert last["status"] == "partial"  # 部分失败
+
+
+def test_shots_mode_dedupes_same_slide(tmp_path, monkeypatch, capsys):
+    """同一分P两条清单项截到同一页 PPT：第二张不落盘，记入 duplicates。"""
+    img_dir, manifest, last = _run_shots(
+        tmp_path, monkeypatch, capsys,
+        shots=[{"page": 1, "section": 1, "t": "00:10", "caption": "图一", "name": "a"},
+               {"page": 1, "section": 2, "t": "02:00", "caption": "图二", "name": "b"}],
+        txt="[00:10] 一\n[02:00] 二\n", frame_for=lambda t: _patterned(1))  # 所有时刻同一画面
+    assert [f["file"] for f in manifest["frames"]] == ["p01_s1_a.png"]  # 只保留第一张
+    assert last["duplicates"][0]["duplicate_of"] == "p01_s1_a.png"  # 记录重复来源
+    assert not (img_dir / "p01_s2_b.png").exists()  # 重复帧未落盘
+
+
+def test_pick_best_prefers_stable_frame():
+    """候选里第一帧是翻页过渡（与后面差异大），后两帧画面已静止 → 选静止帧。"""
+    a, b = _patterned(1), _patterned(2)  # 两种画面
+    t, img, qc = bili_screenshot.pick_best([(10.0, a), (14.0, b), (18.0, b)])  # a 是过渡帧
+    assert t in (14.0, 18.0)  # 选到静止的画面
+    assert bili_screenshot.pick_best([(10.0, None)]) is None  # 全部取不到 → None
+
+
+def test_pick_best_prefers_qc_ok(monkeypatch):
+    """QC 不合格的候选即使更稳定也不选。"""
+    bad, good = _patterned(1), _patterned(2)  # 两帧
+    monkeypatch.setattr(bili_screenshot, "qc_check",
+                        lambda img: "dark" if img is bad else "ok")  # bad 判暗
+    t, img, qc = bili_screenshot.pick_best([(1.0, bad), (5.0, good)])  # 择优
+    assert img is good and qc == "ok"  # 选合格帧
+
+
+def test_dhash_hamming_distinguishes_slides():
+    a, b = _patterned(1), _patterned(2)  # 不同画面
+    assert bili_screenshot.hamming(bili_screenshot.dhash(a), bili_screenshot.dhash(a)) == 0  # 同图距离 0
+    assert bili_screenshot.hamming(bili_screenshot.dhash(a), bili_screenshot.dhash(b)) > bili_screenshot.DUP_HAMMING  # 不同图超阈值

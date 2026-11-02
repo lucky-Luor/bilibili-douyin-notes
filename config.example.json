@@ -1,9 +1,17 @@
 {
-  "_说明": "复制本文件为 config.json 并按需填写；config.json 已被 .gitignore 排除，不会入库。asr_model / asr_device / asr_cpu_threads 三个键均可选，留空或缺省即走脚本默认（本文件保持默认行为）：asr_model=转写模型 tiny/base/small/medium/large-v3，默认 small（高阶模型加载失败自动逐级降级到 small）；asr_device=推理设备 auto/cpu/cuda，默认 auto（检测到 NVIDIA GPU 用 cuda+float16，否则 cpu+int8，cuda 加载失败自动回退 cpu）；asr_cpu_threads=CPU 推理线程数，默认取 min(CPU 核数, 8)，填正整数可覆盖。youtube_proxy=YouTube 代理（如 http://127.0.0.1:7890，可选）；xhs_cookie=小红书浏览器 Cookie（可选，触发风控验证时填写）",
+  "_说明": "复制本文件为 config.json 并按需填写；config.json 已被 .gitignore 排除，不会入库。asr_model / asr_device / asr_cpu_threads 三个键均可选，留空或缺省即走脚本默认（本文件保持默认行为）：asr_model=转写模型 tiny/base/small/medium/large-v3，默认 small（高阶模型加载失败自动逐级降级到 small）；asr_device=推理设备 auto/cpu/cuda，默认 auto（检测到 NVIDIA GPU 用 cuda+float16，否则 cpu+int8，cuda 加载失败自动回退 cpu）；asr_cpu_threads=CPU 推理线程数，默认取 min(CPU 核数, 8)，填正整数可覆盖。youtube_proxy=YouTube 代理（如 http://127.0.0.1:7890，可选）；xhs_cookie=小红书浏览器 Cookie（可选，触发风控验证时填写）；oss=截图上传阿里云 OSS 的配置（可选，scripts/upload_images.py 使用）：endpoint 如 oss-cn-hangzhou.aliyuncs.com，bucket 需公共读或经 CDN 可公开访问，prefix 为对象键前缀（默认 notes/），public_base_url 填 CDN/自定义域名（可选）；也可改用环境变量 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_PREFIX / OSS_PUBLIC_BASE_URL",
   "SESSDATA": "",
   "asr_model": "",
   "asr_device": "",
   "asr_cpu_threads": "",
   "youtube_proxy": "",
-  "xhs_cookie": ""
+  "xhs_cookie": "",
+  "oss": {
+    "endpoint": "",
+    "bucket": "",
+    "access_key_id": "",
+    "access_key_secret": "",
+    "prefix": "notes/",
+    "public_base_url": ""
+  }
 }
