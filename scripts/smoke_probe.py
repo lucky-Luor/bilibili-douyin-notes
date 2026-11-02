@@ -63,6 +63,8 @@ def probe_youtube(url: str) -> dict:  # YouTube：yt-dlp 元数据 + 字幕两�
         sub_error = f"transcript-api: {e}"  # 记下原因，继续走二级
     if not sub:  # 一级没拿到
         sub = y.fetch_via_ytdlp(info, y.DEFAULT_LANGS, opts)  # 二级：yt-dlp 字幕
+    if not sub and not info.get("duration"):  # 没字幕也没时长：被风控时 yt-dlp 只返回带标题的空壳
+        raise RuntimeError(f"只拿到标题，没有时长和字幕，视为被风控拦截（{sub_error or '字幕为空'}）")  # 判为失败，避免假成功
     return {"title": info.get("title", ""),  # 标题
             "duration": int(info.get("duration") or 0),  # 时长（秒）
             "subtitle": bool(sub),  # 是否拿到字幕
