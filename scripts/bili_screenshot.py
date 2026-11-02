@@ -70,7 +70,7 @@ import time
 from pathlib import Path
 
 import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
-from _hints import HintError, explain_bili_code, failure_record, run_cli  # 三段式提示
+from _hints import HintError, explain_bili_code, failure_record, hint_exit, run_cli  # 三段式提示
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -418,7 +418,47 @@ def parse_args(argv=None):
     return ap.parse_args(argv)
 
 
-def write_manifest(img_dir: Path, frames: list, failed: list, touched: set):
+def shot_summary(frames: list, failed: list, dups: list, page_status: dict) -> dict:  # 本次运行的截图汇总
+    """回执口径：截图 N 张；剔除 M 张 = 重复画面 D + 取不到画面 / 时刻非法 F；画质待复核 Q 张（已保留）。"""
+    n, d, f = len(frames), len(dups), len(failed)  # 成功、重复、失败
+    q = sum(1 for x in frames if x.get("qc") not in ("ok", "skipped"))  # 画质未通过、待视觉复核
+    errs = sorted(p for p, st in page_status.items() if st == "error")  # 整集失败的分P
+    receipt = f"截图 {n} 张，剔除坏帧 {d + f} 张（重复 {d}、取不到画面或时刻不对 {f}）"  # 一句话回执
+    if q:  # 有待复核
+        receipt += f"；画质待复核 {q} 张"  # 追加
+    if errs:  # 有整集失败
+        receipt += f"；第 {', '.join(map(str, errs))} 集截图失败，见进度里的 rerun"  # 追加
+    return {"frames": n, "dropped": d + f, "duplicates": d, "failed": f,  # 数量
+            "qc_review": q, "error_pages": errs, "receipt": receipt}  # 待复核、失败分P、回执
+
+
+ZERO_SHOT_HINTS = {  # 一张截图都没出时，按主要原因给出 (原因, 下一步)
+    "no_transcript": ("要截图的分P还没有转写稿（截图时刻要从转写稿里取）",
+                      "先跑 bili_transcribe.py 生成转写稿，再重跑截图"),
+    "no_anchor": ("在转写稿里找不到截图时刻（没有锚点，自动提取也没命中）",
+                  "按 SKILL.md 写 shots.json 清单，用 --shots 重跑"),
+    "t_not_in_transcript": ("截图清单里的时刻都不在转写稿里（偏差超过 ±5 秒）",
+                            "先 grep 转写稿确认真实时刻，改好 shots.json 后重跑"),
+    "partial": ("所有截图时刻都取不到画面，或画面全部重复",
+                "确认视频能正常播放；换几个时刻后重跑"),
+}
+
+
+def zero_shot_hint(page_status: dict, last_error) -> tuple:  # 0 张截图 → (原因, 影响, 下一步, 详情)
+    impact = "笔记里没有截图（正文照常生成）"  # 统一影响
+    if not page_status:  # 一个分P都没处理
+        return ("没有要处理的分P（页码或截图清单与 metadata.json 对不上）", impact,
+                "检查传入的页码和 shots.json 里的 page", "")
+    if last_error and all(st == "error" for st in page_status.values()):  # 全部整集失败
+        return (last_error["reason"], impact, last_error["next_step"], "")  # 直接沿用单集失败的提示
+    for key in ("no_transcript", "no_anchor", "t_not_in_transcript", "partial"):  # 按优先级找主要原因
+        if key in page_status.values():  # 命中
+            reason, next_step = ZERO_SHOT_HINTS[key]  # 取文案
+            return (reason, impact, next_step, f"分P结果：{page_status}")  # 附各分P状态
+    return ("一张截图都没有生成", impact, "查看上面的进度 JSON；仍不清楚请提 issue", f"分P结果：{page_status}")  # 兜底
+
+
+def write_manifest(img_dir: Path, frames: list, failed: list, touched: set, summary: dict | None = None):
     """把截图元数据落盘 manifest.json：本次处理的页覆盖旧记录，未触及的页保留。
 
     M9：被覆盖页（touched）不再被新记录引用的旧 PNG 视为孤儿文件删除；
@@ -452,6 +492,8 @@ def write_manifest(img_dir: Path, frames: list, failed: list, touched: set):
                     print(f"cleaned orphan pngs (overwritten pages): {orphans}",
                           file=sys.stderr)
     manifest = {"frames": old_frames + frames, "failed": old_failed + failed}
+    if summary is not None:  # 本次运行的汇总（回执）
+        manifest["summary"] = summary  # 只记最近一次运行
     mpath.write_text(json.dumps(manifest, ensure_ascii=False, indent=2),
                      encoding="utf-8")
 
@@ -472,6 +514,8 @@ def main(argv=None):
     shots = load_shots(args.shots) if args.shots else None  # 清单模式：{页码: [任务]}
     anchors = {} if shots is not None else load_anchors(video_id)  # 清单模式不查锚点表
     all_frames, all_failed, touched_pages = [], [], set()
+    last_error = None  # 最近一次单集失败的结构化提示
+    page_status, all_dups = {}, []  # 每个分P的处理结果、被去重的帧（用于回执和 0 张报错）
 
     try:
         for p in meta["pages"]:
@@ -483,6 +527,7 @@ def main(argv=None):
             txt_file = txt_dir / f"{page_no:02d}_{safe_name(part)}.txt"
             if not txt_file.exists():
                 print(json.dumps({"page": page_no, "status": "no_transcript"}), flush=True)
+                page_status[page_no] = "no_transcript"  # 记录：缺转写稿
                 continue
             lines = parse_ts_seconds(txt_file.read_text(encoding="utf-8"))
             pre_failed = []  # 抽帧前就判定失败的清单项（时刻非法 / 不在转写稿里）
@@ -516,8 +561,10 @@ def main(argv=None):
                     print(json.dumps({"page": page_no, "part": part, "frames": [],  # 输出进度
                                       "failed": pre_failed, "duplicates": [], "status": "partial"},
                                      ensure_ascii=True), flush=True)  # 与正常进度同构
+                    page_status[page_no] = "t_not_in_transcript"  # 记录：清单时刻全部非法
                     continue  # 下一个分P
                 print(json.dumps({"page": page_no, "status": "no_anchor"}), flush=True)
+                page_status[page_no] = "no_anchor"  # 记录：找不到截图时刻
                 continue
             if args.ascii_names:  # 中文label → zh-<md5前6位>，文件名全ASCII；keyword 保留原文
                 for job in jobs:  # 逐个改写
@@ -575,6 +622,8 @@ def main(argv=None):
                 status = "ok" if not failed else "partial"
                 all_frames.extend(results)
                 all_failed.extend(failed)
+                all_dups.extend(dups)  # 汇总被去重的帧
+                page_status[page_no] = status  # 记录：ok / partial
                 touched_pages.add(page_no)
                 print(json.dumps({"page": page_no, "part": part, "frames": results,
                                   "failed": failed, "duplicates": dups, "status": status},
@@ -585,11 +634,17 @@ def main(argv=None):
                                      + (f' --shots "{args.shots}"' if args.shots else ""))  # 清单模式带上清单
                 print(json.dumps({"page": page_no, "status": "error", **rec},  # error 字段保留，另附三段字段
                                  ensure_ascii=True), flush=True)
+                page_status[page_no] = "error"  # 记录：这一集失败
+                last_error = rec  # 留给 0 张报错引用
             finally:
                 if video is not local_media:
                     video.unlink(missing_ok=True)
     finally:
-        write_manifest(img_dir, all_frames, all_failed, touched_pages)
+        summary = shot_summary(all_frames, all_failed, all_dups, page_status)  # 本次运行的汇总
+        write_manifest(img_dir, all_frames, all_failed, touched_pages, summary)
+    print(summary["receipt"], file=sys.stderr, flush=True)  # 一句话回执，Agent 原样转告用户
+    if not all_frames:  # 用户要了截图，却一张都没出：明确报错，不静默跳过
+        hint_exit(*zero_shot_hint(page_status, last_error))  # 原因 / 影响 / 下一步
 
 
 if __name__ == "__main__":

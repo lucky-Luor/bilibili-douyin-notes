@@ -115,6 +115,8 @@ python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-not
    python "<skill安装目录>/scripts/bili_screenshot.py" "<工作目录>/metadata.json" "<工作目录>" "<工作目录>/images" --shots "<工作目录>/shots.json"
    ```
    输出 `images/p<页>_s<小节>_<name>.png` + `images/manifest.json`（记录 section）。
+   结束时 stderr 打一句**回执**（同时写进 `manifest.json` 的 `summary.receipt`），如“截图 6 张，剔除坏帧 2 张（重复 1、取不到画面或时刻不对 1）”。**交付时把这句原样告诉用户**，不单独出质检报告。
+   **一张截图都没出时脚本以非 0 退出码报错**（原因 / 影响 / 下一步：缺转写稿、找不到截图时刻、清单时刻不在转写稿里、下载被拦截等），按“下一步”处理后重跑；用户要了截图，不能静默交付一篇没有图的笔记，处理不了就明确告诉用户。
 3. **逐张看图**（视觉复核）：画面与 caption 不符、是讲师脸或过渡帧 → 调整 `t` 重跑或删掉该条；
    再把截图以 `![<caption>](images/xxx.png)` 嵌入**清单里写的那个小节**、它佐证的要点旁边。
 
