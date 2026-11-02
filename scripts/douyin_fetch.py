@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""bilibili-douyin-notes 第一步（抖音平台）：获取元数据并下载无水印视频到本地。
+"""bilibili-douyin-notes 第一步（抖音平台）：获取元数据并下载视频到本地，供语音识别转写。
 
 用法:
     python douyin_fetch.py <抖音链接或分享口令文本> [输出目录]
@@ -10,7 +10,7 @@
 
 输出（与 bili_fetch.py 同一份 metadata.json 约定，方便共用第二/三步脚本）:
     <输出目录>/metadata.json   平台/标题/作者/时长/分P列表（page=1, media_path=本地视频）
-    <输出目录>/media_p01.mp4   无水印视频（已存在且>1MB 且无 .part 残片时跳过下载，
+    <输出目录>/media_p01.mp4   原始视频，仅供本地转写（已存在且>1MB 且无 .part 残片时跳过下载，
                                直接复用；下载先写 .part 临时文件，完成后原子替换）
     stdout 最后一行输出 JSON 摘要（供调用方解析），进度信息走 stderr
 
@@ -21,7 +21,7 @@
   4. 追加 Argus 风控参数: verifyFp/fp(本地生成) + uifid(本地伪造) +
      x-secsdk-web-signature = md5(uifid_ts_SALT_query)
   5. GET /aweme/v1/web/aweme/detail/ -> aweme_detail
-  6. play_addr 把 /playwm/ 替换为 /play/ 得无水印地址，download_addr 兜底
+  6. 直接使用接口返回的原始 play_addr，download_addr 兜底（不改写地址，转写只需要音频）
 
 依赖: pip install gmssl ；abogus.py（抖音签名算法，GPLv3）由 ensure_abogus.py
 首次使用时自动下载，不入本仓库（保持仓库主体 MIT）。
@@ -196,13 +196,13 @@ def fetch_aweme_detail(aweme_id: str) -> dict:
 
 
 def pick_video_url(detail: dict):
-    """优先无水印 play_addr（playwm->play），兜底带水印 download_addr。"""
-    play = detail["video"].get("play_addr", {}).get("url_list") or []
-    if play:
-        return play[0].replace("/playwm/", "/play/"), "play_addr (no watermark)"
-    dl = detail["video"].get("download_addr", {}).get("url_list") or []
-    if dl:
-        return dl[0], "download_addr (watermarked)"
+    """按接口原样返回的地址取视频：优先 play_addr，兜底 download_addr；不改写地址。"""
+    play = detail["video"].get("play_addr", {}).get("url_list") or []  # 播放地址列表
+    if play:  # 有播放地址时直接用第一个，原样返回、不做任何替换
+        return play[0], "play_addr"
+    dl = detail["video"].get("download_addr", {}).get("url_list") or []  # 下载地址列表
+    if dl:  # 没有播放地址时用下载地址兜底
+        return dl[0], "download_addr"
     raise RuntimeError("detail 里没有视频下载地址")
 
 

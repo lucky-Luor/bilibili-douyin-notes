@@ -12,7 +12,7 @@ description: 把B站/抖音/YouTube/小红书视频整理成Markdown课堂笔记
 ## 平台分流（第一步先看链接属于哪个平台）
 
 - **B站** → `bili_fetch.py`：走官方API，优先字幕，按需下载音频/视频流
-- **抖音** → `douyin_fetch.py`：游客身份（无需登录/SESSDATA），直接下载无水印视频到本地，一般无字幕 → 必走第二步ASR（抖音视频短，耗时可忽略）。需要 `pip install gmssl`；`abogus.py` 为 GPLv3 代码（源自 Evil0ctal/Douyin_TikTok_Download_API 经 BiliNote 移植），分发需保留其许可头
+- **抖音** → `douyin_fetch.py`：游客身份（无需登录/SESSDATA），下载视频到本地供语音识别（只用于本地转写，用完可清理），一般无字幕 → 必走第二步ASR（抖音视频短，耗时可忽略）。需要 `pip install gmssl`；`abogus.py` 为 GPLv3 代码（源自 Evil0ctal/Douyin_TikTok_Download_API 经 BiliNote 移植），分发需保留其许可头
 - **YouTube** → `yt_fetch.py`：字幕三级回退（youtube-transcript-api 人工→自动字幕 → yt-dlp json3 字幕 → 无字幕交 ASR），有字幕时不下载任何媒体；需要 `pip install yt-dlp youtube-transcript-api`，并建议安装 [deno](https://deno.com)（yt-dlp 解 YouTube JS 挑战所需）
 - **小红书** → `xhs_fetch.py`：免登录、无签名，手机 UA 请求分享页并解析内嵌 `__INITIAL_STATE__`，下载视频到本地（默认 h264 转码流，`--origin` 下载体积大得多的原片）；**只支持视频笔记**，图文笔记脚本直接提示退出；链接必须带 `xsec_token`（让用户从 App「分享 → 复制链接」整段发来）；一般无字幕 → 必走第二步 ASR
 - 四个平台的 metadata.json 字段一致，第二/三步脚本自动兼容：B站分P按 `bvid/cid` 按需下载，抖音分P带 `media_path` 直接用本地视频文件
@@ -56,7 +56,7 @@ python "<skill安装目录>/scripts/xhs_fetch.py" "<分享链接或分享文本>
   - `none` → 该分P确实没有字幕，直接进入第二步 ASR，不用再折腾；**但若摘要带 `hint_optional`（未配置登录态时可能出现），转述给用户**：「若该视频本应有 AI 字幕，可扫码登录（`--login`）后重跑，通常能跳过语音识别」——由用户判断要不要扫，不强制；
   - `api_empty` → 接口没返回可用字幕URL（`sessdata_loaded:false` 时常见，AI字幕需要登录）：**主动询问用户「要现在扫码登录B站吗？」，确认后代跑 `python "<skill安装目录>/scripts/bili_fetch.py" --login`（脚本生成二维码 PNG 图片并打印路径，把路径给用户打开扫码即登录，SESSDATA 自动写入 config.json）后重跑一次 fetch**；用户拒绝或重跑后仍是 `api_empty` 才走第二步 ASR 兜底；
   - `error` → 查看摘要里的 error 信息（可能是视频失效/风控），重试一次或直接告知用户。
-- **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（无水印，本地已存在则跳过下载），无字幕，直接进入第二步 ASR。
+- **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（仅供本地转写，本地已存在则跳过下载），无字幕，直接进入第二步 ASR。
 - **YouTube**：按摘要里分P的 `subtitle_detail` 分流：
   - `manual` / `auto` / `ytdlp_manual` / `ytdlp_auto` → 已写出 `01_<标题>.txt`（`[mm:ss]` 格式，自动字幕已去滚动重复）+ `.done` 标记，直接进入第三步；`subtitle_lang` 为英文等非中文时，笔记用中文撰写、术语保留原文；
   - `none` → 无可用字幕：加 `--download` 重跑（下载音频到 `media_p01.m4a`），再进入第二步 ASR；

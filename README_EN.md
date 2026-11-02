@@ -21,6 +21,8 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 
 <p align="center"><img src="docs/images/note-preview.png" alt="Note preview" width="760"></p>
 
+> 📜 **Personal study only**: public videos only, everything runs locally, no data collected; do not use it to redistribute or for commercial purposes. See [Usage Notice & Data Flow](#-usage-notice--data-flow).
+
 ---
 
 ## ✨ Features
@@ -29,7 +31,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 - **Subtitles first**: fetches official / AI subtitles from Bilibili (login optional) — instant transcripts at zero cost
 - **Local ASR fallback**: when no subtitles exist, transcribes locally with faster-whisper (CPU int8; uses the hf-mirror inside mainland China). **No paid API calls**
 - **Key-frame screenshots**: anchored on transcript timestamps and extracted with PyAV; a local quality check flags black / blank / blurry frames (white-background slides are not misjudged), and the agent makes the final visual call
-- **Douyin without login**: downloads watermark-free videos as a guest (ttwid + a_bogus signature), no account cookie needed
+- **Douyin without login**: accesses public videos as a guest, no account cookie needed; the video is used only for local transcription and can be cleaned up afterwards
 - **Xiaohongshu without login**: parses the data embedded in the share page and downloads video notes directly — no signature, no account (video notes only; image notes and comments are not supported)
 - **Lecture-note template**: sections, bolded key terms, real code references, a mind map, concept cards, self-test questions, and a collapsible video time index with deep links back to the video
 
@@ -156,6 +158,17 @@ Use a smaller `asr_model` (e.g. `small` / `base`) in `config.json`, or set `asr_
 
 Yes — faster-whisper is multilingual. Note that the note template and examples are written in Chinese, so ask your agent explicitly if you want the notes in English.
 </details>
+
+## 📜 Usage Notice & Data Flow
+
+- **Personal study only**: this tool turns public courses into your own study notes. Do not use it to repost, redistribute or for any commercial purpose; follow each platform's terms of service and respect creators' copyright.
+- **Public content only**: paid / premium content and private favorites are not supported and are not planned; the Bilibili SESSDATA cookie is only an optional fallback for subtitles.
+- **Where your data goes**:
+  - Fetching, ASR and screenshots all run on your own machine; this project collects no usage data and uploads nothing (it has no server).
+  - Downloaded video / audio is used only for local ASR and screenshots, and can be removed with `clean_media.py` afterwards (the agent asks you first).
+  - Screenshots stay local unless you configure OSS yourself and run `upload_images.py --apply`, which uploads to **your own** bucket.
+  - Notes are written by your own AI agent; subtitles and transcripts are sent to whatever model service that agent uses, under its own rules.
+- **Platform notices**: if a platform raises a notice or objection, the maintainer will take the related module offline within 48 hours and explain it in this README.
 
 ## ⚠️ Known Limitations
 
