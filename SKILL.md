@@ -28,6 +28,17 @@ description: 把B站/抖音/YouTube/小红书视频整理成Markdown课堂笔记
 
 ## 工作流程
 
+### 第零步：环境自检（每个会话第一次处理视频前跑一次）
+
+```bash
+python "<skill安装目录>/scripts/doctor.py" --platform <本次链接的平台> --json
+```
+
+- 平台取 `bilibili` / `douyin` / `youtube` / `xiaohongshu`；退出码 1 表示有 FAIL
+- 有 `FAIL`：先把对应的 `fix` 原样告诉用户并停下，修好再开工；不要跳过自检硬跑
+- 只有 `WARN`：可以开工，开工前用一句话说明影响（如“没有显卡，这个无字幕视频大约要 X 分钟”“YouTube 连不上，需要代理”）
+- `skill 文件` 为 FAIL（被加密软件处理过）时，提示用户用 `git clone` 重新安装，不要尝试自己修文件
+
 ### 第一步：抓取元数据 + 字幕（B站 / YouTube）或下载视频（抖音 / 小红书）
 
 ```bash
