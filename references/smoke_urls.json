@@ -11,8 +11,8 @@
     {"url": "https://www.youtube.com/watch?v=zjkBMFhNj_g", "note": "Karpathy Intro to LLMs"}
   ],
   "douyin": [
-    {"url": "https://www.douyin.com/video/7126745726494821640", "note": "候选，待核实"},
-    {"url": "https://www.douyin.com/video/7304875720877034803", "note": "候选，待核实"},
+    {"url": "", "note": "待补充（原候选 7126745726494821640 已删除，2026-11-02）"},
+    {"url": "https://www.douyin.com/video/7304875720877034803", "note": "已核实可用，内容非课程类，待替换"},
     {"url": "", "note": "待补充"}
   ],
   "xiaohongshu": [

@@ -137,3 +137,29 @@ def test_probe_douyin_range_request(monkeypatch):
     assert seen["url"] == "https://v/playwm/?x"  # 地址未被改写
     assert seen["range"] == f"bytes=0-{smoke_probe.RANGE_BYTES - 1}"  # 范围头正确
     assert r["range_bytes"] == smoke_probe.RANGE_BYTES and r["duration"] == 19  # 摘要正确
+
+
+def _fake_yt(monkeypatch, info, transcript):  # 打桩 yt_fetch 的各个函数
+    import yt_fetch  # 被打桩的平台模块
+    monkeypatch.setattr(yt_fetch, "load_config", lambda: {})  # 无配置
+    monkeypatch.setattr(yt_fetch, "fetch_info", lambda vid, opts: info)  # 元数据
+    monkeypatch.setattr(yt_fetch, "fetch_via_transcript_api", transcript)  # 一级字幕
+    monkeypatch.setattr(yt_fetch, "fetch_via_ytdlp", lambda info, langs, opts: None)  # 二级字幕为空
+
+
+def test_probe_youtube_blocked_stub_is_failure(monkeypatch):
+    # 机房 IP 上 yt-dlp 只返回标题、时长为 0、字幕被拦截：必须判为失败（2026-11-02 Actions 实测）
+    def blocked(vid, langs, proxy):  # 一级字幕被封
+        raise RuntimeError("blocked")  # 与 yt_fetch 的约定一致
+    _fake_yt(monkeypatch, {"title": "t", "duration": 0}, blocked)  # 空壳元数据
+    with pytest.raises(RuntimeError, match="视为被风控拦截"):  # 期望失败
+        smoke_probe.probe_youtube("https://www.youtube.com/watch?v=aircAruvnKk")  # 执行
+    r = smoke_probe.run_one("youtube", "https://www.youtube.com/watch?v=aircAruvnKk")  # 走完整流程
+    assert r["ok"] is False and "transcript-api: blocked" in r["error"]  # 记录为失败并带原因
+
+
+def test_probe_youtube_no_subtitle_but_duration_is_ok(monkeypatch):
+    # 没字幕但有时长：可以下载音频走语音识别，算成功
+    _fake_yt(monkeypatch, {"title": "t", "duration": 600}, lambda vid, langs, proxy: None)  # 有时长、无字幕
+    r = smoke_probe.probe_youtube("https://www.youtube.com/watch?v=aircAruvnKk")  # 执行
+    assert r["duration"] == 600 and r["subtitle"] is False  # 成功返回摘要
