@@ -95,6 +95,7 @@ def test_douyin_ttwid_failure_is_human(monkeypatch):
 def _detail_with(monkeypatch, behaviour):  # 让详情接口按 behaviour 返回或抛错，返回调用计数
     box = {"n": 0}  # 调用次数
     monkeypatch.setattr(douyin_fetch, "get_ttwid", lambda: "t")  # 跳过 ttwid
+    monkeypatch.setattr(douyin_fetch, "ABogus", lambda: type("B", (), {"get_value": lambda self, p: "x"})())  # CI 无 gmssl，签名打桩
     monkeypatch.setattr(douyin_fetch.time, "sleep", lambda s: None)  # 不等待
     def fake(url, data=None, headers=None, method=None):  # 假请求
         box["n"] += 1  # 计数
