@@ -36,6 +36,8 @@ import re  # 链接与文件名正则处理
 import sys  # stderr 日志与 stdout 编码设置
 from pathlib import Path  # 路径操作
 
+from _hints import HintError, hint_exit, run_cli  # 三段式提示
+
 # 本 skill 安装目录下的 config.json（与 bili_fetch.py 共用同一份配置）
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
@@ -74,7 +76,8 @@ def extract_video_id(text: str) -> str:
     m = URL_ID_RE.search(text)  # 在链接 / 整段文本中查找 ID
     if m:  # 命中任意一种链接形态
         return m.group(1)  # 返回捕获到的 ID
-    raise SystemExit(f"无法从输入中解析 YouTube 视频ID: {text[:100]}")  # 统一的人话报错
+    hint_exit("无法从输入中解析 YouTube 视频 ID", "无法开始",  # 原因与影响
+              "把完整的 YouTube 链接或 11 位视频 ID 发过来", text[:100])  # 下一步与原始输入
 
 
 def load_config() -> dict:
@@ -121,7 +124,8 @@ def check_not_live(info: dict):
     """直播中 / 尚未开播的视频没有可用字幕与完整音频，直接人话退出。"""
     status = info.get("live_status")  # yt-dlp 的直播状态字段
     if status in ("is_live", "is_upcoming"):  # 正在直播或预告
-        raise SystemExit("这是正在进行或尚未开始的直播，暂无法生成笔记，请等直播结束（回放生成后）再试。")  # 人话提示
+        hint_exit("这是正在进行或尚未开始的直播", "暂时无法生成笔记",  # 原因与影响
+                  "等直播结束、回放生成后再试")  # 下一步
 
 
 def dedupe_rolling(segments: list[dict]) -> list[dict]:
@@ -268,7 +272,9 @@ def download_audio(video_id: str, outdir: Path, base_opts: dict) -> Path:
     if real != dest and real.exists():  # 非 m4a 扩展名
         dest = real  # 以实际文件为准（PyAV 可直接解码 webm/opus）
     if not dest.exists() or dest.stat().st_size < 10 * 1024:  # 文件缺失或过小
-        raise RuntimeError("音频下载失败或文件过小，可能被风控，请配置 cookies / 代理后重试")  # 人话报错
+        raise HintError("音频下载失败或文件过小，多半被 YouTube 风控拦截",  # 原因
+                        "这个视频没有音频，无法语音识别",  # 影响
+                        "加 --cookies-from-browser chrome 或 --cookies，并配置代理后重试")  # 下一步
     return dest  # 返回音频路径
 
 
@@ -318,9 +324,11 @@ def main(argv=None):
         info = fetch_info(video_id, base_opts)  # 取元数据
     except Exception as e:  # yt-dlp 抛 DownloadError 等
         msg = str(e)  # 错误信息
-        hint = ("（被要求登录验证：请加 --cookies-from-browser chrome 或 --cookies 后重试，"
-                "必要时配置代理并安装 deno）") if "not a bot" in msg or "Sign in" in msg else ""  # 风控提示
-        raise SystemExit(f"获取 YouTube 元数据失败: {msg[:200]}{hint}")  # 人话退出
+        if "not a bot" in msg or "Sign in" in msg:  # 被要求登录验证（风控）
+            hint_exit("YouTube 要求登录验证（被识别为机器人）", "无法获取视频信息",  # 原因与影响
+                      "加 --cookies-from-browser chrome 或 --cookies 后重试，必要时配置代理并安装 deno", msg[:200])  # 下一步
+        hint_exit("获取 YouTube 元数据失败（视频不公开、已删除，或网络连不上 YouTube）", "无法获取视频信息",  # 原因与影响
+                  "确认视频在浏览器里能公开观看；国内网络需用 --proxy 或 config.json 配置代理后重试", msg[:200])  # 下一步
     check_not_live(info)  # 直播中直接退出
     title = (info.get("title") or "YouTube视频").strip()  # 标题
     owner = info.get("uploader") or info.get("channel") or ""  # 作者
@@ -382,4 +390,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":  # 命令行入口
-    main()  # 执行主流程
+    run_cli(main)  # 执行主流程；顶层失败只打印原因 / 影响 / 下一步

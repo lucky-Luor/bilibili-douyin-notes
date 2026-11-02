@@ -188,17 +188,21 @@ lecture 完整骨架、时间戳规范、语法契约、short 差异表、截图
 
 ## 常见问题
 
+脚本失败时统一输出三段：`原因：` / `影响：` / `下一步：`（必要时附 `详情：`）。**把这三段原样转告用户，按“下一步”处理**，不要只说“脚本报错了”。单集失败的进度 JSON 另有 `reason` / `impact` / `next_step` / `rerun` 字段，`rerun` 是只补跑这一集的命令。
+
 | 现象 | 处理 |
 |---|---|
 | 分P `subtitle_detail` 为 `api_empty` | 主动询问用户「要现在扫码登录B站吗？」，确认后代跑 `bili_fetch.py --login`（生成二维码 PNG 图片并打印路径）后重跑；用户拒绝或重跑后仍 `api_empty` 才走 ASR |
 | 分P `subtitle_detail` 为 `ai_mismatch` | AI 字幕整体错位（内容是别的音频，看着通顺但与视频无关），fetch 已自动判出并按无字幕处理；直接走 ASR，不要试图沿用存疑字幕 |
-| playurl 下载失败/音频为空 | 可能是风控，重试一次；仍失败则改用 `yt-dlp` 下载音频后手动喂给 transcribe 的 transcribe 函数思路 |
+| 提示“请求被B站风控拦截”（HTTP 412） | 云服务器 / 机房 IP 上常见，脚本不会重复请求：换到家用网络或在本机运行；等几分钟再试 |
+| playurl 下载失败/音频为空 | 按提示的“下一步”处理（多为风控或需要登录）；单集失败照 `rerun` 补跑这一集 |
 | faster-whisper 首次运行卡在下载 | 检查 HF_ENDPOINT 是否为 https://hf-mirror.com，或手动 `pip install -U huggingface_hub` |
 | 转写文本术语错乱 | 用 `references/asr-glossary.json` 对照校正；词表未覆盖的新错法按同样格式补进词表 `map`，下次自动生效 |
-| `subtitle_detail` 为 `error` | 看摘要里的 error 信息：视频可能已失效/被风控，重试一次或告知用户换视频 |
+| `subtitle_detail` 为 `error` | 看该分P的 `reason` / `next_step`：这一集会改走语音识别；想重取字幕按 `rerun` 重跑 |
 | 转写质量差（长视频尤甚） | 先删对应 txt，再用 `--model medium` 重转；有 NVIDIA GPU 时脚本会自动用 CUDA float16，也可 `--device cuda` 强制 |
-| 抖音 detail 接口 403 / "无 aweme_detail" | 签名算法可能被抖音升级，参考 Evil0ctal/Douyin_TikTok_Download_API 或 JefferyHcool/BiliNote 更新 `abogus.py` / `WEB_SIGN_SALT`；另确认视频可公开访问（非私密/仅粉丝可见） |
-| 抖音视频下载中断/文件过小 | 下载地址有时效，重跑 douyin_fetch.py 重新解析即可（本地已有完整 mp4 会自动跳过下载） |
+| 抖音提示“作品不可见” | 作品已删除、设为私密或仅粉丝可见（平台返回了 `filter_detail`），不是签名问题：告知用户换链接 |
+| 抖音提示“签名算法已被平台升级” / HTTP 403 | 参考 Evil0ctal/Douyin_TikTok_Download_API 或 JefferyHcool/BiliNote 更新 `abogus.py` / `WEB_SIGN_SALT`，或提 issue |
+| 抖音 / 小红书提示“下载的文件过小” | 多半被风控或下载地址过期：等几分钟重跑 fetch 脚本重新解析（本地已有完整 mp4 会自动跳过下载） |
 | YouTube 报 "Sign in to confirm you're not a bot" / `blocked` | 云服务器 IP 常被 YouTube 拒绝：加 `--cookies-from-browser chrome`（或导出 cookies.txt 用 `--cookies`），必要时 `--proxy` 或在 config.json 配 `youtube_proxy` |
 | YouTube 缺格式 / 下载失败 | 升级 `pip install -U yt-dlp` 并安装 deno（2025 年起 YouTube 需要 JS 运行时解挑战） |
 | YouTube 年龄限制视频 | youtube-transcript-api 拿不到，需 `--cookies`/`--cookies-from-browser` 让 yt-dlp 回退取字幕 |

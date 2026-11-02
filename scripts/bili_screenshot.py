@@ -70,7 +70,7 @@ import time
 from pathlib import Path
 
 import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
-from _hints import failure_record  # 单集失败的结构化提示
+from _hints import HintError, explain_bili_code, failure_record, run_cli  # 三段式提示
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -258,15 +258,14 @@ def download_video(bvid: str, cid: int, dest: Path, cookie: str = "") -> Path:
     url = f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&fnval=16"
     data = json.loads(http_get(url, cookie).decode("utf-8"))
     if data.get("code") != 0:  # 失效视频/风控/需要登录等，给出可读报错而非裸 KeyError
-        raise RuntimeError(
-            f"playurl API 返回 code={data.get('code')}: "
-            f"{data.get('message') or data.get('msg') or '未知错误'}（视频可能已失效、需要登录或风控拦截）")
+        raise explain_bili_code(data.get("code"), data.get("message") or data.get("msg") or "",  # 按业务码解释
+                                "这一集没有截图，笔记照常生成")  # 影响
     try:
         videos = data["data"]["dash"]["video"]
     except (KeyError, TypeError) as e:
-        raise RuntimeError(
-            f"playurl 响应缺少 dash.video 字段（bvid={bvid} cid={cid}，"
-            "可能未登录无 DASH 流权限）") from e
+        raise HintError("B站没有返回这一集的视频流（多半是未登录，没有 DASH 流权限）",  # 原因
+                        "这一集没有截图，笔记照常生成",  # 影响
+                        "运行 bili_fetch.py --login 扫码登录后，按补跑命令重试这一集", f"bvid={bvid} cid={cid}") from e  # 下一步
     best = max(videos, key=lambda v: v["id"])  # 未登录最高480p
     _net.download_to(best["baseUrl"] or best["base_url"], _net.bili_headers(cookie), dest,  # 流式下载；4xx / 断线转成三段式提示
                      platform="bilibili", impact="这一集没有截图，笔记照常生成")
@@ -594,4 +593,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)  # 顶层失败只打印原因 / 影响 / 下一步

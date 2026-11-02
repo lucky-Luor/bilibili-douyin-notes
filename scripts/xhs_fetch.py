@@ -39,6 +39,8 @@ import urllib.request  # 纯标准库 HTTP（与 douyin_fetch 一致，不引入
 from pathlib import Path  # 路径操作
 from urllib.parse import parse_qs, quote, urlparse  # 解析 / 重建查询参数
 
+from _hints import HintError, explain_http, hint_exit, run_cli  # 三段式提示
+
 # 手机浏览器 UA：实测未登录时桌面 UA 会被 302 到登录页，手机 UA 可直接拿到笔记数据
 UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
       "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")  # iOS Safari
@@ -101,12 +103,13 @@ def resolve_link(text: str) -> tuple[str, str, str]:
         text = http(m.group(0)).geturl()  # 跟随 302 拿到完整链接
     m = NOTE_URL_RE.search(text or "")  # 找完整笔记链接
     if not m:  # 解析不到
-        raise SystemExit(f"无法从输入中解析小红书笔记链接: {(text or '')[:100]}")  # 人话退出
+        hint_exit("无法从输入中解析小红书笔记链接", "无法开始",  # 原因与影响
+                  "把完整的小红书分享链接或整段分享文本发过来", (text or "")[:100])  # 下一步与原始输入
     qs = parse_qs(urlparse(m.group(0)).query)  # 解析查询参数（会自动 URL 解码）
     token = (qs.get("xsec_token") or [""])[0]  # 访问令牌
     if not token:  # 没有令牌无法访问
-        raise SystemExit("链接缺少 xsec_token：请在小红书 App / 网页点「分享 → 复制链接」，"
-                         "把完整链接（或整段分享文本）发过来，只有笔记 ID 无法访问。")  # 引导用户
+        hint_exit("链接缺少 xsec_token（访问令牌），只有笔记 ID 无法访问", "无法开始",  # 原因与影响
+                  "在小红书 App / 网页点「分享 → 复制链接」，把完整链接（或整段分享文本）重新发过来")  # 下一步
     source = (qs.get("xsec_source") or ["app_share"])[0]  # 来源，缺省按 App 分享
     return m.group(1), token, source  # 返回三元组
 
@@ -121,7 +124,8 @@ def parse_state(html: str) -> dict:
     """解析页面中的 window.__INITIAL_STATE__（JS 字面量 undefined 替换为 null 后按 JSON 读）。"""
     m = STATE_RE.search(html)  # 定位状态脚本
     if not m:  # 页面结构变化或被拦截
-        raise RuntimeError("页面中没有 __INITIAL_STATE__（可能被风控拦截或页面结构已变化）")  # 报错
+        raise HintError("小红书页面里没有笔记数据块（被风控拦截，或页面结构已变化）", "无法获取笔记信息",  # 原因与影响
+                        "稍后重试，或在 config.json 配置 xhs_cookie 后重跑；持续出现请提 issue")  # 下一步
     return json.loads(re.sub(r"\bundefined\b", "null", m.group(1)))  # 替换后解析
 
 
@@ -138,7 +142,7 @@ def extract_note(state: dict, note_id: str) -> dict:
 def check_is_video(note: dict):
     """图文笔记直接人话退出：本工具只处理视频笔记（与抖音图集处理一致）。"""
     if note.get("type") != "video" or not note.get("video"):  # 不是视频笔记
-        raise SystemExit("这是图文笔记，本工具只处理视频笔记，请换一个视频笔记链接再试。")  # 人话退出
+        hint_exit("这是图文笔记，本工具只处理视频笔记", "无法生成这条笔记", "请换一个视频笔记链接再试")  # 三段式退出
 
 
 def pick_video_url(note: dict, origin: bool = False) -> tuple[str, str]:
@@ -162,7 +166,8 @@ def pick_video_url(note: dict, origin: bool = False) -> tuple[str, str]:
         return url.replace("http://", "https://", 1), f"stream.{codec} {best.get('height')}p"  # 统一 https
     if origin_url:  # 没有转码流时用原片兜底
         return origin_url, "originVideoKey (原片)"  # 返回
-    raise RuntimeError("笔记数据里没有视频下载地址")  # 都没有
+    raise HintError("笔记数据里没有视频下载地址（小红书返回结构可能已变化）", "无法下载视频",  # 原因与影响
+                    "换一条视频笔记试试；都不行请提 issue 附上这个链接")  # 下一步
 
 
 def download(url: str, dest: Path, cookie: str = "") -> int:
@@ -170,7 +175,11 @@ def download(url: str, dest: Path, cookie: str = "") -> int:
     part = dest.with_name(dest.name + ".part")  # 临时文件
     log(f"[3] downloading -> {dest.name}")  # 进度
     n = 0  # 已下载字节数
-    resp = http(url, cookie)  # 发起下载
+    try:  # 下载地址有时效，过期常见 403
+        resp = http(url, cookie)  # 发起下载
+    except urllib.error.HTTPError as e:  # 服务器拒绝或地址失效
+        raise explain_http(e.code, "xiaohongshu", "这条视频没有下载下来",  # 三段式提示
+                           "下载地址可能已过期：重跑本脚本会重新解析地址") from e  # 详情补充原因
     with open(part, "wb") as f:  # 写临时文件
         while chunk := resp.read(1 << 16):  # 64KB 分块读取
             f.write(chunk)  # 写入
@@ -206,18 +215,18 @@ def fetch_note(note_id: str, token: str, source: str, cookie: str) -> dict:
         resp = http(url, cookie)  # 请求
     except urllib.error.HTTPError as e:  # 非 2xx
         if e.code in CAPTCHA_CODES:  # 风控验证码
-            raise SystemExit(f"小红书触发风控验证（HTTP {e.code}）：请稍后再试，"
-                             "或在 config.json 配置 xhs_cookie 后重跑。")  # 人话退出
-        raise  # 其他错误原样抛出
+            hint_exit(f"小红书触发风控验证（HTTP {e.code}）", "无法获取笔记信息",  # 原因与影响
+                      "稍后再试，或在 config.json 配置 xhs_cookie 后重跑")  # 下一步
+        raise explain_http(e.code, "xiaohongshu", "无法获取笔记信息") from e  # 其他状态码也给三段式提示
     final_url = resp.geturl()  # 跟随跳转后的地址
     html = resp.read().decode("utf-8", "replace")  # 页面内容
     if "/login" in urlparse(final_url).path or "/404" in urlparse(final_url).path:  # 被跳登录页 / 404
-        raise SystemExit("笔记页被重定向（登录页或 404）：xsec_token 可能已过期或笔记不可见，"
-                         "请重新复制分享链接再试。")  # 人话退出
+        hint_exit("笔记页被重定向到登录页或 404：xsec_token 可能已过期，或笔记不可见", "无法获取笔记信息",  # 原因与影响
+                  "在小红书 App / 网页点「分享 → 复制链接」，把完整链接（或整段分享文本）重新发过来（请重新复制分享链接）")  # 下一步
     note = extract_note(parse_state(html), note_id)  # 解析笔记
     if not note:  # 页面里没有笔记数据
-        raise SystemExit("页面里没有笔记数据：xsec_token 可能已过期或笔记已删除/仅自己可见，"
-                         "请重新复制分享链接再试。")  # 人话退出
+        hint_exit("页面里没有笔记数据：xsec_token 可能已过期，或笔记已删除 / 仅自己可见", "无法获取笔记信息",  # 原因与影响
+                  "在小红书 App / 网页点「分享 → 复制链接」，把完整链接（或整段分享文本）重新发过来（请重新复制分享链接）")  # 下一步
     return note  # 返回笔记对象
 
 
@@ -258,7 +267,9 @@ def main(argv=None):
         vurl, kind = pick_video_url(note, args.origin)  # 选择地址
         n = download(vurl, media, cookie)  # 下载
         if n < 100 * 1024:  # 文件过小
-            raise RuntimeError(f"下载的文件过小({n}字节)，可能被风控，请重试")  # 报错
+            raise HintError(f"下载的文件过小（{n} 字节），不是完整视频，多半被风控拦截",  # 原因
+                            "这条视频没有音频，无法转写和截图",  # 影响
+                            "等几分钟后重跑；仍不行在 config.json 配置 xhs_cookie 后重试")  # 下一步
         log(f"[3] downloaded {n} bytes ({kind})")  # 进度
 
     meta = {  # metadata.json 内容（字段与抖音一致）
@@ -288,4 +299,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":  # 命令行入口
-    main()  # 执行主流程
+    run_cli(main)  # 执行主流程；顶层失败只打印原因 / 影响 / 下一步
