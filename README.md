@@ -264,7 +264,14 @@ Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI
 <details>
 <summary><b>脚本报编码错误 / 生成的笔记打开是乱码？</b></summary>
 
-如果电脑装了文件加密（防泄密）软件，用资源管理器或 PowerShell 复制的 `.py`、`.md` 文件会被加密，Python 读出来就是乱码。`doctor.py` 会检查出这种情况。解决办法：用 `git clone` 重新获取本 skill；仍不行，请 IT 把 `python.exe` 和你的 AI Agent 加入加密软件白名单。
+如果电脑装了文件加密（防泄密）软件，用资源管理器、PowerShell 甚至 `git clone` 写出的 `.md`、`.txt` 文件都可能被加密（实测 `.py`、`.json` 不受影响），Python 和 pip 读出来就是乱码。`doctor.py` 会检查出这种情况。
+
+- **根本解决**：请 IT 把 `python.exe` 和你的 AI Agent 加入加密软件白名单；重新 `git clone` 不一定有用
+- **`pip install -r requirements.txt` 报 `UnicodeDecodeError`**：说明 `requirements.txt` 被加密了，改用直接列出包名的命令：
+
+  ```bash
+  pip install faster-whisper ctranslate2 av numpy pillow qrcode gmssl "yt-dlp>=2026.8.19" "youtube-transcript-api>=1.2.0" oss2
+  ```
 </details>
 
 <details>

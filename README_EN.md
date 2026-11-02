@@ -151,6 +151,19 @@ Python 3.10+ and any AI agent that supports the Agent Skills (`SKILL.md`) spec, 
 </details>
 
 <details>
+<summary><b>Scripts fail with encoding errors / notes open as garbage?</b></summary>
+
+File-encryption (DLP) software can encrypt `.md` and `.txt` files written by Explorer, PowerShell or even `git clone` (`.py` and `.json` were not affected in our tests), so Python and pip read ciphertext. `doctor.py` detects this.
+
+- **Real fix**: ask IT to whitelist `python.exe` and your AI agent; re-cloning may not help
+- **`pip install -r requirements.txt` fails with `UnicodeDecodeError`**: `requirements.txt` itself is encrypted — list the packages directly:
+
+  ```bash
+  pip install faster-whisper ctranslate2 av numpy pillow qrcode gmssl "yt-dlp>=2026.8.19" "youtube-transcript-api>=1.2.0" oss2
+  ```
+</details>
+
+<details>
 <summary><b>Do I have to log in to Bilibili?</b></summary>
 
 No. Official CC subtitles work without login, and local ASR kicks in when there are none. Logging in by QR code unlocks Bilibili AI subtitles, which lets most videos skip ASR entirely. Douyin and Xiaohongshu need no login at all; YouTube usually doesn't either — add cookies / a proxy only if it blocks you.

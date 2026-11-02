@@ -183,8 +183,9 @@ def check_skill_files(root: Path = ROOT) -> dict:  # skill 自身文件是否可
     if bad:  # 有被加密的文件
         shown = "、".join(bad[:5]) + (f" 等 {len(bad)} 个" if len(bad) > 5 else "")  # 列出前几个
         return item("skill 文件", "FAIL", f"{shown} 被加密 / 防泄密软件处理过，Python 读到的不是明文",  # 失败
-                    "用 git clone 重新获取本 skill，不要用资源管理器或 PowerShell 复制 .py 文件；"  # 修复建议
-                    "仍不行请让 IT 把 python.exe 加入加密软件白名单（生成的 .md 笔记打开是乱码时同理）")
+                    "请 IT 把 python.exe 和你用的 AI Agent 加入加密软件白名单（重新 git clone 不一定有用："  # 修复建议
+                    "实测 git 写出的 .md / .txt 同样会被加密）；requirements.txt 被加密时 pip install -r 会失败，"  # 依赖安装也受影响
+                    "可改用 README「安装」里直接列出包名的 pip 命令")  # 绕开的安装办法
     return item("skill 文件", "OK", f"{len(files)} 个脚本与模板均可正常读取")  # 通过
 
 

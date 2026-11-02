@@ -96,7 +96,7 @@ def test_check_skill_files(tmp_path):
     assert doctor.check_skill_files(tmp_path)["status"] == "OK"  # 全部明文
     (tmp_path / "scripts" / "bad.py").write_bytes(b"\x00\x01\x02")  # 加密文件
     r = doctor.check_skill_files(tmp_path)  # 再查一次
-    assert r["status"] == "FAIL" and "bad.py" in r["detail"] and "git clone" in r["fix"]  # 失败并给出修复
+    assert r["status"] == "FAIL" and "bad.py" in r["detail"] and "白名单" in r["fix"] and "pip" in r["fix"]  # 失败并给出修复：白名单 + 依赖安装绕法
 
 
 def test_check_network_classifies(monkeypatch):

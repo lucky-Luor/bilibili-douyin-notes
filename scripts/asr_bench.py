@@ -36,6 +36,8 @@ def split_list(text: str, cast=str) -> list:  # 把逗号分隔的参数拆成�
 
 def audio_seconds(path: Path) -> float:  # 解码音频求时长（秒）
     from faster_whisper.audio import decode_audio  # 惰性导入
+    import _pyav_compat  # faster-whisper 1.2.1 与 PyAV 19 的兼容层
+    _pyav_compat.ensure()  # 装上后 decode_audio 才能在新版 PyAV 上运行
     return len(decode_audio(str(path), sampling_rate=SAMPLE_RATE)) / SAMPLE_RATE  # 采样点数 ÷ 采样率
 
 
@@ -47,6 +49,8 @@ def similarity(a: str, b: str) -> float:  # 两段文字的相似度
 
 def run_combo(path: Path, model_size: str, threads: int, batch: int, lang: str | None, device: str) -> dict:  # 跑一个组合
     from faster_whisper import BatchedInferencePipeline, WhisperModel  # 惰性导入
+    import _pyav_compat  # faster-whisper 1.2.1 与 PyAV 19 的兼容层
+    _pyav_compat.ensure()  # 转写时内部同样走 decode_audio
     compute = "float16" if device == "cuda" else "int8"  # 与 bili_transcribe.py 的精度选择一致
     t0 = time.monotonic()  # 加载计时起点
     model = WhisperModel(model_size, device=device, compute_type=compute, cpu_threads=threads)  # 加载模型

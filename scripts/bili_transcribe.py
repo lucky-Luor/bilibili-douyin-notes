@@ -151,6 +151,8 @@ def load_model(model_size: str, device: str = "auto") -> dict:
     if model_cached(model_size):
         os.environ["HF_HUB_OFFLINE"] = "1"
     from faster_whisper import WhisperModel
+    import _pyav_compat  # faster-whisper 1.2.1 与 PyAV 19 的兼容层
+    _pyav_compat.ensure()  # 不装的话，无字幕视频解码音频时报 metadata_errors 参数错误
     meta = {"model_used": model_size, "device_used": detect_device(device),
             "fallback_reasons": []}
     model = None
