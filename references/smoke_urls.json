@@ -1,23 +1,59 @@
 {
-  "_说明": "smoke_probe.py 的真实链接清单。每个平台放 3 条公开、长期有效的链接；url 为空的条目会被跳过。小红书链接必须带 xsec_token（App「分享 → 复制链接」），令牌过期后需要更新。",
+  "_说明": "smoke_probe.py 的真实链接清单。每个平台放 3 条公开、长期有效的链接；url 为空的条目会被跳过。小红书链接必须带 xsec_token（App「分享 → 复制链接」），令牌过期后需要更新。 小红书令牌来自网页搜索结果（xsec_source=pc_search），失效后在网页版重新搜索复制；首页推荐流里的令牌在页面外访问常被跳登录页，不要用。",
   "bilibili": [
-    {"url": "https://www.bilibili.com/video/BV1Wv411h7kN", "note": "李宏毅机器学习 2021/2022，155 个分P"},
-    {"url": "https://www.bilibili.com/video/BV1zMpaeTEJa", "note": "面向对象分析与设计，13 个分P"},
-    {"url": "https://www.bilibili.com/video/BV1AXs4zFEem", "note": "伯克利 CS61A 中文配音，合集（75 个视频）且自身 151 个分P"}
+    {
+      "url": "https://www.bilibili.com/video/BV1Wv411h7kN",
+      "note": "李宏毅机器学习 2021/2022，155 个分P"
+    },
+    {
+      "url": "https://www.bilibili.com/video/BV1zMpaeTEJa",
+      "note": "面向对象分析与设计，13 个分P"
+    },
+    {
+      "url": "https://www.bilibili.com/video/BV1AXs4zFEem",
+      "note": "伯克利 CS61A 中文配音，合集（75 个视频）且自身 151 个分P"
+    }
   ],
   "youtube": [
-    {"url": "https://www.youtube.com/watch?v=aircAruvnKk", "note": "3Blue1Brown 神经网络第 1 集，人工字幕"},
-    {"url": "https://www.youtube.com/watch?v=kCc8FmEb1nY", "note": "Karpathy Let's build GPT，长视频"},
-    {"url": "https://www.youtube.com/watch?v=zjkBMFhNj_g", "note": "Karpathy Intro to LLMs"}
+    {
+      "url": "https://www.youtube.com/watch?v=aircAruvnKk",
+      "note": "3Blue1Brown 神经网络第 1 集，人工字幕"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=kCc8FmEb1nY",
+      "note": "Karpathy Let's build GPT，长视频"
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=zjkBMFhNj_g",
+      "note": "Karpathy Intro to LLMs"
+    }
   ],
   "douyin": [
-    {"url": "", "note": "待补充（原候选 7126745726494821640 已删除，2026-11-02）"},
-    {"url": "https://www.douyin.com/video/7304875720877034803", "note": "已核实可用，内容非课程类，待替换"},
-    {"url": "", "note": "待补充"}
+    {
+      "url": "https://www.douyin.com/video/7660922036683885830",
+      "note": "零基础学 Python · 01，6 分 52 秒"
+    },
+    {
+      "url": "https://www.douyin.com/video/7686069068108959028",
+      "note": "Python 全套零基础入门（合集），12 分 5 秒"
+    },
+    {
+      "url": "https://www.douyin.com/video/7637114619907018018",
+      "note": "Python 从入门到精通 · 项目实战，17 分 15 秒"
+    }
   ],
   "xiaohongshu": [
-    {"url": "", "note": "待补充：带 xsec_token 的视频笔记分享链接"},
-    {"url": "", "note": "待补充"},
-    {"url": "", "note": "待补充"}
+    {
+      "url": "https://www.xiaohongshu.com/explore/6ae36d620000000025019462?xsec_token=ABo-BahzaCwyssdlKysxb8F8EolVxIkaHyB0hKZMsRsJA=&xsec_source=pc_search",
+      "note": "10 分钟速通 Python 异常处理，10 分 0 秒"
+    },
+    {
+      "url": "https://www.xiaohongshu.com/explore/69de0743000000002301fa8d?xsec_token=ABxKp3dRDtqe61ZQ3q4lx4wklvUsRNayQ5c7_6InHm0eU=&xsec_source=pc_search",
+      "note": "香港大学计算机系 · 保姆级 Python 入门，13 分 41 秒"
+    },
+    {
+      "url": "https://www.xiaohongshu.com/explore/6a3e762800000000210237fd?xsec_token=ABVlm7-yhAv_cnAov6VBSTjTYo5P6Be3-LdTZlOFzrITI=&xsec_source=pc_search",
+      "note": "第 1 节 Python 安装，16 分 4 秒"
+    }
   ]
 }
