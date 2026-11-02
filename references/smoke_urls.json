@@ -1,0 +1,23 @@
+{
+  "_说明": "smoke_probe.py 的真实链接清单。每个平台放 3 条公开、长期有效的链接；url 为空的条目会被跳过。小红书链接必须带 xsec_token（App「分享 → 复制链接」），令牌过期后需要更新。",
+  "bilibili": [
+    {"url": "https://www.bilibili.com/video/BV1Wv411h7kN", "note": "李宏毅机器学习 2021/2022，155 个分P"},
+    {"url": "https://www.bilibili.com/video/BV1zMpaeTEJa", "note": "面向对象分析与设计，13 个分P"},
+    {"url": "https://www.bilibili.com/video/BV1AXs4zFEem", "note": "伯克利 CS61A 中文配音，合集（75 个视频）且自身 151 个分P"}
+  ],
+  "youtube": [
+    {"url": "https://www.youtube.com/watch?v=aircAruvnKk", "note": "3Blue1Brown 神经网络第 1 集，人工字幕"},
+    {"url": "https://www.youtube.com/watch?v=kCc8FmEb1nY", "note": "Karpathy Let's build GPT，长视频"},
+    {"url": "https://www.youtube.com/watch?v=zjkBMFhNj_g", "note": "Karpathy Intro to LLMs"}
+  ],
+  "douyin": [
+    {"url": "https://www.douyin.com/video/7126745726494821640", "note": "候选，待核实"},
+    {"url": "https://www.douyin.com/video/7304875720877034803", "note": "候选，待核实"},
+    {"url": "", "note": "待补充"}
+  ],
+  "xiaohongshu": [
+    {"url": "", "note": "待补充：带 xsec_token 的视频笔记分享链接"},
+    {"url": "", "note": "待补充"},
+    {"url": "", "note": "待补充"}
+  ]
+}

@@ -1,0 +1,50 @@
+# W1 技术验证：在 GitHub Actions（机房 IP）上跑真实链接冒烟探针，只能手动触发
+name: Smoke Probe
+
+on:
+  workflow_dispatch:  # 只允许手动触发，不定时、不随 push 运行
+    inputs:
+      platform:  # 可选：只跑部分平台
+        description: "只跑这些平台（逗号分隔，留空为全部）"
+        required: false
+        default: ""
+
+jobs:
+  probe:
+    runs-on: ${{ matrix.os }}  # 两种 runner 都测，看机房 IP 的拦截差异
+    strategy:
+      fail-fast: false  # 一个 runner 失败不影响另一个
+      matrix:
+        os: [ubuntu-latest, windows-latest]  # Linux 与 Windows runner
+
+    steps:
+      - uses: actions/checkout@v4  # 拉代码
+
+      - name: Set up Python
+        uses: actions/setup-python@v5  # 安装 Python
+        with:
+          python-version: "3.12"  # 与 CI 矩阵中的较新版本一致
+
+      # 只装抓取需要的依赖；不装 faster-whisper，探针不做语音识别
+      - name: Install fetch dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yt-dlp youtube-transcript-api gmssl
+
+      # abogus.py 不入仓库，按 ensure_abogus.py 从上游固定 commit 下载并校验
+      - name: Fetch abogus.py
+        run: python scripts/ensure_abogus.py
+
+      # 探针本身总是返回 0，结果写进 JSON 和步骤摘要，便于对比两种 runner
+      - name: Run smoke probe
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8  # Windows runner 下统一 UTF-8 输出
+        run: |
+          python scripts/smoke_probe.py --platform "${{ github.event.inputs.platform }}" --out smoke-${{ matrix.os }}.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4  # 保存完整 JSON 结果
+        with:
+          name: smoke-${{ matrix.os }}
+          path: smoke-${{ matrix.os }}.json
