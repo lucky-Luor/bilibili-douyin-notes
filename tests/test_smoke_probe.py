@@ -58,7 +58,7 @@ def test_summarize_rates():
     results = [{"platform": "bilibili", "ok": True}, {"platform": "bilibili", "ok": False},  # B站 1/2
                {"platform": "youtube", "ok": True}]  # YouTube 1/1
     s = smoke_probe.summarize(results)  # 统计
-    assert s["bilibili"] == {"total": 2, "ok": 1, "rate": 0.5}  # B站成功率 50%
+    assert s["bilibili"] == {"total": 2, "ok": 1, "link": 0, "rate": 0.5}  # B站成功率 50%
     assert s["youtube"]["rate"] == 1.0  # YouTube 成功率 100%
 
 
@@ -163,3 +163,38 @@ def test_probe_youtube_no_subtitle_but_duration_is_ok(monkeypatch):
     _fake_yt(monkeypatch, {"title": "t", "duration": 600}, lambda vid, langs, proxy: None)  # 有时长、无字幕
     r = smoke_probe.probe_youtube("https://www.youtube.com/watch?v=aircAruvnKk")  # 执行
     assert r["duration"] == 600 and r["subtitle"] is False  # 成功返回摘要
+
+
+def test_classify_link_vs_platform():
+    # 令牌过期、作品已删除算链接失效；风控、接口变动算平台故障
+    assert smoke_probe.classify("") == "ok"  # 成功
+    assert smoke_probe.classify("原因：笔记页被重定向到登录页或 404：xsec_token 可能已过期") == "link"  # 小红书令牌过期
+    assert smoke_probe.classify("HintError: 原因：作品不可见（已删除、设为私密或仅粉丝可见）") == "link"  # 抖音作品删除
+    assert smoke_probe.classify("HintError: 原因：请求被B站风控拦截") == "platform"  # 风控
+
+
+def test_summary_excludes_link_failures_from_rate():
+    # 成功率不含链接失效；合计按全部平台算
+    results = [{"platform": "xiaohongshu", "ok": True, "category": "ok"},  # 成功
+               {"platform": "xiaohongshu", "ok": False, "category": "link"},  # 令牌过期
+               {"platform": "douyin", "ok": False, "category": "platform"}]  # 平台故障
+    s = smoke_probe.summarize(results)  # 统计
+    assert s["xiaohongshu"]["rate"] == 1.0 and s["xiaohongshu"]["link"] == 1  # 不含链接失效
+    assert smoke_probe.overall(s) == {"ok": 1, "valid": 2, "link": 1, "rate": 0.5}  # 合计
+    md = smoke_probe.render_markdown([dict(r, url="u", seconds=0, error="e", detail={}) for r in results], s)  # 生成报告
+    assert "整体成功率 50%" in md and "⚠️ 链接失效" in md and "_说明" in md  # 合计、标记、维护提示
+
+
+def test_strict_ignores_link_failures_and_report_dir(tmp_path, monkeypatch):
+    # --strict 只在平台故障时返回 1；--report-dir 写出同名 .md 与 .json
+    p = tmp_path / "urls.json"  # 链接清单
+    p.write_text(json.dumps({"xiaohongshu": ["u1"]}), encoding="utf-8")  # 一条小红书
+    def expired(url):  # 模拟令牌过期
+        raise SystemExit("原因：页面里没有笔记数据：xsec_token 可能已过期")  # 三段式退出
+    monkeypatch.setitem(smoke_probe.PROBES, "xiaohongshu", expired)  # 打桩
+    rd = tmp_path / "reports"  # 报告目录
+    assert smoke_probe.main(["--urls", str(p), "--strict", "--report-dir", str(rd)]) == 0  # 链接失效不算失败
+    mds = list(rd.glob("smoke-*.md"))  # 生成的报告
+    assert len(mds) == 1 and mds[0].with_suffix(".json").exists()  # .md 与 .json 成对
+    data = json.loads(mds[0].with_suffix(".json").read_text(encoding="utf-8"))  # 读 JSON
+    assert data["overall"]["link"] == 1 and data["results"][0]["category"] == "link"  # 分类写入

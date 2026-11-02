@@ -16,3 +16,5 @@ notes/
 uploads/
 # 批处理工作区（字幕/识别稿、日志、临时脚本），不入库
 work/
+# 本机冒烟报告（scripts/smoke_local.py）
+reports/
