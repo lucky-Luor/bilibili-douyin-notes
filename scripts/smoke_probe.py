@@ -9,7 +9,9 @@
     - 链接清单默认读 references/smoke_urls.json，格式见该文件的 "_说明" 字段
     - 抖音、小红书只解析到视频地址；抖音额外对地址发一次 64KB 的范围请求，确认地址可用
     - 每条链接单独计时、单独捕获异常，一条失败不影响其他链接
-    - stdout 输出 Markdown 汇总表；--out 另存完整 JSON；--strict 时有失败则退出码为 1
+    - stdout 输出 Markdown 汇总表；--out 另存完整 JSON；--report-dir 按时间戳另存 .md + .json
+    - 失败分两类：链接失效（令牌过期、作品已删除，换链接即可）与平台故障（风控、接口变动，需要修代码）；
+      成功率按“不含链接失效”统计，--strict 只在有平台故障时退出码为 1
 """
 import argparse  # 命令行参数解析
 import json  # 读写 JSON
@@ -23,6 +25,7 @@ if str(SCRIPTS) not in sys.path:  # 确保能导入同目录的各平台脚本
 DEFAULT_URLS = SCRIPTS.parent / "references" / "smoke_urls.json"  # 默认链接清单位置
 RANGE_BYTES = 65536  # 抖音视频地址可用性检查只读这么多字节
 ERROR_MAX = 300  # 错误信息最多保留的字符数
+LINK_ERROR_MARKERS = ("xsec_token", "作品不可见", "稿件不可见", "不存在或已删除", "找不到这个内容")  # 这些提示说明是链接本身失效
 
 
 def _reconfigure_stdout() -> None:  # Windows 管道下统一用 UTF-8 输出
@@ -105,6 +108,12 @@ PROBES = {"bilibili": probe_bilibili,  # 平台名 → 探测函数
           "xiaohongshu": probe_xiaohongshu}  # 小红书
 
 
+def classify(error: str) -> str:  # 失败分类：链接失效只需换链接，平台故障才需要修代码
+    if not error:  # 没有错误
+        return "ok"  # 成功
+    return "link" if any(m in error for m in LINK_ERROR_MARKERS) else "platform"  # 按提示文案判断
+
+
 def run_one(platform: str, url: str) -> dict:  # 探测单条链接，任何异常都转成失败记录
     start = time.monotonic()  # 开始计时
     detail, error = {}, ""  # 结果与错误
@@ -117,6 +126,7 @@ def run_one(platform: str, url: str) -> dict:  # 探测单条链接，任何异�
     return {"platform": platform,  # 平台
             "url": url,  # 链接
             "ok": not error,  # 没有错误即成功
+            "category": classify(error),  # ok / link（链接失效）/ platform（平台故障）
             "seconds": round(time.monotonic() - start, 1),  # 耗时（秒）
             "error": error[:ERROR_MAX],  # 截断后的错误信息
             "detail": detail}  # 平台返回的摘要
@@ -138,23 +148,38 @@ def load_urls(path: Path, platforms: list[str] | None) -> list[tuple[str, str]]:
 def summarize(results: list[dict]) -> dict:  # 按平台统计成功率
     summary = {}  # 平台 → 统计
     for r in results:  # 遍历每条结果
-        s = summary.setdefault(r["platform"], {"total": 0, "ok": 0})  # 取或建该平台的计数
+        s = summary.setdefault(r["platform"], {"total": 0, "ok": 0, "link": 0})  # 取或建该平台的计数
         s["total"] += 1  # 总数加一
         s["ok"] += 1 if r["ok"] else 0  # 成功数加一
-    for s in summary.values():  # 计算成功率
-        s["rate"] = round(s["ok"] / s["total"], 3) if s["total"] else 0.0  # 保留三位小数
+        s["link"] += 1 if r.get("category") == "link" else 0  # 链接失效数加一
+    for s in summary.values():  # 计算成功率（不含链接失效：那是清单维护问题，不是平台故障）
+        valid = s["total"] - s["link"]  # 有效链接数
+        s["rate"] = round(s["ok"] / valid, 3) if valid else 0.0  # 保留三位小数
     return summary  # 返回统计
 
 
+def overall(summary: dict) -> dict:  # 全部平台合计（发版标准“冒烟 ≥ 95%”按它判断）
+    ok = sum(s["ok"] for s in summary.values())  # 成功数
+    link = sum(s["link"] for s in summary.values())  # 链接失效数
+    valid = sum(s["total"] for s in summary.values()) - link  # 有效链接数
+    return {"ok": ok, "valid": valid, "link": link,  # 计数
+            "rate": round(ok / valid, 3) if valid else 0.0}  # 成功率
+
+
 def render_markdown(results: list[dict], summary: dict) -> str:  # 生成 Markdown 汇总
-    lines = ["| 平台 | 成功 / 总数 | 成功率 |", "|---|---|---|"]  # 汇总表表头
+    o = overall(summary)  # 合计
+    lines = [f"**整体成功率 {o['rate']:.0%}**（{o['ok']} / {o['valid']}，不含链接失效 {o['link']} 条）", ""]  # 合计行
+    lines += ["| 平台 | 成功 / 有效链接 | 成功率 | 链接失效 |", "|---|---|---|---|"]  # 汇总表表头
     for platform, s in summary.items():  # 每个平台一行
-        lines.append(f"| {platform} | {s['ok']} / {s['total']} | {s['rate']:.0%} |")  # 汇总行
+        lines.append(f"| {platform} | {s['ok']} / {s['total'] - s['link']} | {s['rate']:.0%} | {s['link']} |")  # 汇总行
     lines += ["", "| 平台 | 结果 | 耗时(s) | 链接 | 摘要 / 错误 |", "|---|---|---|---|---|"]  # 明细表表头
     for r in results:  # 每条链接一行
         info = r["error"] if not r["ok"] else json.dumps(r["detail"], ensure_ascii=False)  # 失败写错误，成功写摘要
         info = info.replace("|", "\\|").replace("\n", " ")  # 转义表格分隔符、去掉换行
-        lines.append(f"| {r['platform']} | {'✅' if r['ok'] else '❌'} | {r['seconds']} | {r['url']} | {info} |")  # 明细行
+        mark = {"ok": "✅", "link": "⚠️ 链接失效"}.get(r.get("category"), "❌ 平台故障")  # 结果标记
+        lines.append(f"| {r['platform']} | {mark} | {r['seconds']} | {r['url']} | {info} |")  # 明细行
+    if any(r.get("category") == "link" for r in results):  # 有链接失效
+        lines += ["", "链接失效的处理：按 references/smoke_urls.json 的 _说明 重新取链接（小红书要从网页搜索结果里重取令牌）。"]  # 维护提示
     return "\n".join(lines)  # 拼成文本
 
 
@@ -163,7 +188,8 @@ def parse_args(argv=None):  # 解析命令行参数
     ap.add_argument("--urls", default=str(DEFAULT_URLS), help="链接清单 JSON 路径")  # 清单路径
     ap.add_argument("--platform", default="", help="只跑这些平台，逗号分隔")  # 平台过滤
     ap.add_argument("--out", default="", help="另存完整 JSON 结果的路径")  # JSON 输出路径
-    ap.add_argument("--strict", action="store_true", help="有失败时退出码为 1")  # 严格模式
+    ap.add_argument("--report-dir", default="", help="按时间戳另存 smoke-<时间>.md 与 .json 的目录")  # 报告目录
+    ap.add_argument("--strict", action="store_true", help="有平台故障时退出码为 1（链接失效不算）")  # 严格模式
     return ap.parse_args(argv)  # 返回解析结果
 
 
@@ -182,12 +208,26 @@ def main(argv=None) -> int:  # 主流程：读清单 → 逐条探测 → 汇总
         print(f"[smoke] {platform} {url}", file=sys.stderr, flush=True)  # 进度走 stderr
         results.append(run_one(platform, url))  # 记录结果
     summary = summarize(results)  # 统计
-    print(render_markdown(results, summary))  # stdout 输出 Markdown
+    markdown = render_markdown(results, summary)  # Markdown 汇总
+    print(markdown)  # stdout 输出 Markdown
+    payload = json.dumps({"summary": summary, "overall": overall(summary), "results": results},  # 完整结果
+                         ensure_ascii=False, indent=2)  # 可读格式
     if args.out:  # 需要另存 JSON
-        Path(args.out).write_text(json.dumps({"summary": summary, "results": results},  # 写入完整结果
-                                             ensure_ascii=False, indent=2), encoding="utf-8")  # UTF-8 落盘
-    failed = sum(1 for r in results if not r["ok"])  # 失败条数
-    return 1 if args.strict and failed else 0  # 严格模式下有失败返回 1
+        Path(args.out).write_text(payload, encoding="utf-8")  # UTF-8 落盘
+    if args.report_dir:  # 需要按时间戳存报告
+        write_report(Path(args.report_dir), markdown, payload)  # 写 .md 与 .json
+    failed = sum(1 for r in results if r.get("category") == "platform")  # 平台故障条数
+    return 1 if args.strict and failed else 0  # 严格模式下有平台故障返回 1
+
+
+def write_report(report_dir: Path, markdown: str, payload: str, stamp: str = "") -> Path:  # 按时间戳落盘报告
+    report_dir.mkdir(parents=True, exist_ok=True)  # 确保目录存在
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")  # 本地时间戳
+    md = report_dir / f"smoke-{stamp}.md"  # Markdown 报告
+    md.write_text(f"# 冒烟报告 {stamp}\n\n{markdown}\n", encoding="utf-8")  # 写 Markdown
+    md.with_suffix(".json").write_text(payload, encoding="utf-8")  # 写同名 JSON
+    print(f"[smoke] 报告已写入 {md}", file=sys.stderr, flush=True)  # 告知位置
+    return md  # 返回 Markdown 路径
 
 
 if __name__ == "__main__":  # 脚本入口
