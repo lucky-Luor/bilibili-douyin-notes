@@ -39,6 +39,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
+from _hints import failure_record  # 单集失败的结构化提示
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CONFIG = Path(__file__).resolve().parent.parent / "config.json"
@@ -182,21 +185,9 @@ def login() -> None:
 
 
 def http_get(url: str, cookie: str = "", retries: int = RETRIES) -> bytes:
-    """带重试的 GET：网络类错误按 1s/2s 退避重试，与抖音侧对称。"""
-    headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
-    if cookie:
-        headers["Cookie"] = f"SESSDATA={cookie}"
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            last_exc = e
-            if attempt < retries - 1:
-                time.sleep(attempt + 1)
-    raise last_exc
+    """带重试的 GET（实现见 _net.http_get）：只对网络类错误重试，HTTP 4xx 直接给出原因和下一步。"""
+    return _net.http_get(url, _net.bili_headers(cookie), retries=retries,  # 4xx 不重试，失败给三段式提示
+                         platform="bilibili", impact="无法获取视频信息或字幕")
 
 
 def api(url: str, cookie: str = "") -> dict:
@@ -446,7 +437,8 @@ def main():
                 entry["subtitle_detail"] = "api_empty" if saw_track else "none"
         except Exception as e:  # 单个分P失败不阻塞整体
             entry["subtitle_detail"] = "error"
-            entry["error"] = str(e)
+            entry.update(failure_record(e, "这一集拿不到字幕，会改走语音识别",  # 结构化的原因 / 影响 / 下一步
+                                        f'python "{Path(__file__).resolve()}" {bvid}'))  # 补跑命令：重取字幕
         report["pages"].append(entry)
 
     # 字幕详情回写进 metadata.json 的 pages[]，供后续步骤直接读取（不依赖 stdout 解析）
