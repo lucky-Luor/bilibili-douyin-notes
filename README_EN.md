@@ -191,6 +191,17 @@ Yes — faster-whisper is multilingual. Note that the note template and examples
   - Notes are written by your own AI agent; subtitles and transcripts are sent to whatever model service that agent uses, under its own rules.
 - **Platform notices**: if a platform raises a notice or objection, the maintainer will take the related module offline within 48 hours and explain it in this README.
 
+## 🛡️ Platform Support Tiers
+
+This project is maintained by one person, so Bilibili comes first.
+
+| Tier | Platforms | Commitment |
+|---|---|---|
+| Tier 1 | Bilibili | Fixed **within 7 days** after a platform change breaks it; real-link smoke tests run twice a week and before every release |
+| Tier 2 | YouTube, Douyin, Xiaohongshu | **Best effort**: breakages are confirmed and tracked in issues, with no fixed timeline; Douyin's signature and Xiaohongshu's page structure are controlled by the platforms and may break temporarily |
+
+When something fails, the scripts print a three-part message (cause / impact / next step) and tell you whether the link itself is the problem (just use another link) or the platform changed (wait for a fix). Please open an issue with the link and that message.
+
 ## ⚠️ Known Limitations
 
 - Videos without subtitles need local ASR: measured at about 0.2× the video length on a 6-core laptop CPU (CPU int8; older CPUs are slower), faster with an NVIDIA GPU
