@@ -91,7 +91,7 @@ python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-not
 注意事项：
 - **设备与降级链**：自动检测 CUDA（有 NVIDIA GPU 用 float16，否则 CPU int8 + 批量推理）；cuda 加载失败自动回退 cpu，批量推理不可用自动回退逐段，高阶模型（medium/large）加载失败自动降一档直到 small——**每次落级都打印原因（stderr 警告 + JSON `fallback_reasons`），不静默**。检测异常时可用 `--device cpu` / `--device cuda` 强制指定；`--model` 未指定时读 config.json 的 `asr_model`（再默认 small），`asr_cpu_threads` 可调 CPU 线程数。
 - **术语偏好注入**：脚本自动读词表（仓库层 + 用户层），把高频术语的正确词注入 ASR 的 initial_prompt——转写时就写对，比事后纠错更准。
-- **耗时**：CPU int8 下 small 模型约为视频时长的 1~3 倍（批量推理可缓解；有 NVIDIA GPU 时快于实时），长视频（>1小时）耗时明显，转写前告知用户预计时间；长视频或对质量不满意时用 `--model medium` 重转（**先删对应的 txt**，否则脚本会跳过）。
+- **耗时**：CPU int8 下 small 模型实测约为视频时长的 0.2 倍（6 核笔记本 CPU，批量推理 + 静音过滤；更老的 CPU 会慢一些，有 NVIDIA GPU 时更快），转写前按“时长 × 0.2”告知用户预计时间，先转第 1 个分P后按实际耗时修正；长视频或对质量不满意时用 `--model medium` 重转（**先删对应的 txt**，否则脚本会跳过）。
 - 首次运行会下载模型（small≈480MB，自动走 hf-mirror.com 镜像）。
 - ASR 文稿没有标点分段质量保证，技术术语常被转错——生成笔记前用 `references/asr-glossary.json` 词表对照校正（见第三步第2条）。
 

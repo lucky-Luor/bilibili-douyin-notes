@@ -150,7 +150,8 @@ def check_device(config: dict) -> dict:  # 推理设备
                     "把 config.json 的 asr_device 改成 auto")  # 修复建议
     if cuda and want != "cpu":  # 有 GPU 且没强制 CPU
         return item("推理设备", "OK", "检测到 NVIDIA 显卡：无字幕视频的语音识别快于视频时长")  # 通过
-    return item("推理设备", "OK", "CPU：无字幕视频的语音识别耗时约为视频时长的 1~3 倍，有字幕的视频不受影响")  # 通过（附耗时预期）
+    return item("推理设备", "OK", "CPU：无字幕视频的语音识别实测约为视频时长的 0.2 倍（6 核笔记本 CPU），"  # 通过（附耗时预期）
+                "更老的 CPU 会慢一些；有字幕的视频不受影响")  # W1 实测口径，见 docs/verification/W1-技术验证.md
 
 
 def check_console(os_name=None, encoding=None) -> dict:  # 控制台编码

@@ -276,7 +276,7 @@ Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI
 <details>
 <summary><b>语音识别太慢怎么办？</b></summary>
 
-在 `config.json` 里把 `asr_model` 调小（如 `small` / `base`），或在有 NVIDIA 显卡时设置 `asr_device: "cuda"`。也可以先只转写一个分P（`--page 1`）估算耗时。
+默认的 `small` 模型在 6 核笔记本 CPU 上实测约为视频时长的 0.2 倍（26 分钟的课约 4 分钟）。赶时间可以在 `config.json` 里把 `asr_model` 设为 `base`，速度约快 3 倍，但识别质量明显下降（实测和 `small` 的文字一致度只有 0.72~0.79），术语错得更多；有 NVIDIA 显卡时设置 `asr_device: "cuda"`。也可以先只转写一个分P（`--page 1`）估算耗时。
 </details>
 
 <details>
@@ -322,7 +322,7 @@ YouTube 会拦截部分服务器 IP。给 `yt_fetch.py` 加 `--cookies-from-brow
 
 ## ⚠️ 已知限制
 
-- 长视频（>1小时）本地转写耗时：CPU int8 约为视频时长的 1~3 倍（批量推理可缓解），有 NVIDIA GPU 时快于实时
+- 无字幕视频需要本地语音识别：CPU int8 实测约为视频时长的 0.2 倍（6 核笔记本 CPU；更老的 CPU 会慢一些），有 NVIDIA GPU 时更快
 - ASR 转写的技术术语可能出错（如 IoC、Starter），生成笔记时建议结合上下文或代码仓库校正
 - 抖音依赖平台签名算法，平台升级时可能临时失效（表现为 detail 接口 403），需跟进上游项目更新签名实现
 - 抖音签名的 `abogus.py` 依赖上游仓库（BiliNote）托管：下载 URL 已固定到上游具体 commit 并做 SHA-256 校验；上游更新签名算法时，可用环境变量 `BILINOTE_ABOGUS_SHA=<新commit>` 临时指向新 revision，或按 `scripts/ensure_abogus.py` 文件头的手动安装步骤放置文件

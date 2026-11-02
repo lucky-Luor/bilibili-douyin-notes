@@ -57,7 +57,7 @@ def test_check_device_cuda_config_without_gpu(monkeypatch):
     fake = types.SimpleNamespace(get_cuda_device_count=lambda: 0)  # 没有 CUDA 设备
     monkeypatch.setitem(sys.modules, "ctranslate2", fake)  # 注入
     assert doctor.check_device({"asr_device": "cuda"})["status"] == "WARN"  # 警告
-    assert "1~3 倍" in doctor.check_device({})["detail"]  # CPU 时给出耗时预期
+    assert "0.2 倍" in doctor.check_device({})["detail"]  # CPU 时给出实测耗时预期
 
 
 @pytest.mark.parametrize("os_name,enc,status", [("nt", "cp936", "WARN"), ("nt", "UTF-8", "OK"),
