@@ -60,6 +60,12 @@ Video link (Bilibili / Douyin / YouTube / Xiaohongshu)
 git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.claude/skills/bilibili-douyin-notes && pip install -r ~/.claude/skills/bilibili-douyin-notes/requirements.txt
 ```
 
+Run the environment check once and fix anything it marks as failed:
+
+```bash
+python ~/.claude/skills/bilibili-douyin-notes/scripts/doctor.py
+```
+
 Then just ask your agent: **"Make lecture notes from this video: https://www.bilibili.com/video/BVxxxx"**.
 
 ## 📦 Installation
@@ -82,6 +88,9 @@ pip install -r requirements.txt
 
 # 3. (Optional) Log in to Bilibili by QR code to get AI subtitles
 python scripts/bili_fetch.py --login
+
+# 4. Environment check: ✅ / ⚠️ / ❌ per item with fix commands (--platform douyin for Douyin only, --json for agents)
+python scripts/doctor.py
 ```
 
 | Component | Purpose | Required? |
@@ -91,6 +100,18 @@ python scripts/bili_fetch.py --login
 | `gmssl` | Douyin a_bogus signature (SM3) | Douyin links only |
 | `yt-dlp` / `youtube-transcript-api` | YouTube metadata, captions and audio (deno recommended) | YouTube links only |
 | `numpy` / `pillow` | Screenshot quality check | Screenshot step only |
+
+### Using Chinese models in Claude Code
+
+Claude is not available in mainland China. Claude Code can use Chinese models instead, with no change to this skill: all three providers offer an Anthropic-compatible endpoint. Set the base URL and put your key in `ANTHROPIC_AUTH_TOKEN` (do not also set `ANTHROPIC_API_KEY`):
+
+| Provider | `ANTHROPIC_BASE_URL` | Official guide (check model names there) |
+|---|---|---|
+| DeepSeek | `https://api.deepseek.com/anthropic` | [Integrate with Claude Code](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/) |
+| Kimi | `https://api.moonshot.cn/anthropic` | [Claude Code with Kimi](https://platform.kimi.com/docs/guide/claude-code-kimi) |
+| Zhipu GLM | `https://open.bigmodel.cn/api/anthropic` | [Claude API compatibility](https://docs.bigmodel.cn/cn/guide/develop/claude/introduction) |
+
+Model names change quickly, so set `ANTHROPIC_MODEL` and related variables according to the official guides. Note quality depends on the model; the `validate_note.py` quality gate keeps the format in check.
 
 ## ⚙️ Configuration
 
@@ -126,7 +147,7 @@ python scripts/validate_note.py "<note.md>" --template v4 --meta "<outdir>/metad
 <details>
 <summary><b>What do I need?</b></summary>
 
-Python 3.10+ and any AI agent that supports the Agent Skills (`SKILL.md`) spec, such as Claude Code, Codex or ZCode. No GPU and no paid API required.
+Python 3.10+ and any AI agent that supports the Agent Skills (`SKILL.md`) spec, such as Claude Code, Codex or ZCode. No GPU and no paid API required. Not sure your setup is complete? Run `python scripts/doctor.py`.
 </details>
 
 <details>

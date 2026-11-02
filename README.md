@@ -73,7 +73,13 @@
 git clone https://github.com/lucky-Luor/bilibili-douyin-notes.git ~/.claude/skills/bilibili-douyin-notes && pip install -r ~/.claude/skills/bilibili-douyin-notes/requirements.txt
 ```
 
-装好后直接对 AI 说：**「帮我把这个视频做成课堂笔记：https://www.bilibili.com/video/BVxxxx」**。详细安装与可选配置见下文。
+装好后先跑一次环境自检，按提示修好失败项：
+
+```bash
+python ~/.claude/skills/bilibili-douyin-notes/scripts/doctor.py
+```
+
+然后直接对 AI 说：**「帮我把这个视频做成课堂笔记：https://www.bilibili.com/video/BVxxxx」**。详细安装与可选配置见下文。
 
 ## 📦 安装
 
@@ -104,6 +110,11 @@ python scripts/bili_fetch.py --login   # 生成二维码 PNG 图片并打印路�
                                        # 无 B站App：cp config.example.json config.json 后按文件内注释手动填写
 ```
 
+```bash
+# 4. 环境自检：逐项给出 ✅ / ⚠️ / ❌ 和修复命令（--platform douyin 只查抖音相关项，--json 供智能体解析）
+python scripts/doctor.py
+```
+
 > **路径说明**：`SKILL.md` 中示例命令的 `<skill安装目录>` 为占位符，使用时请替换为
 > 本 skill 的实际安装路径（脚本内部均基于 `__file__` 相对定位，改路径不影响运行）。
 
@@ -119,6 +130,25 @@ python scripts/bili_fetch.py --login   # 生成二维码 PNG 图片并打印路�
 | `numpy` / `pillow` | 截图画质初筛（像素占比法 QC） | 仅截图流程需要 |
 
 </details>
+
+### 在 Claude Code 里接国产模型
+
+Claude 官方服务不支持中国大陆。可以让 Claude Code 改用国产模型，本 skill 不需要任何改动。三家都提供 Anthropic 兼容接口，只要设置两个环境变量，把 Key 填进 `ANTHROPIC_AUTH_TOKEN`（不要同时设置 `ANTHROPIC_API_KEY`）：
+
+| 模型 | `ANTHROPIC_BASE_URL` | 官方文档（模型名以文档为准） |
+|---|---|---|
+| DeepSeek | `https://api.deepseek.com/anthropic` | [DeepSeek：Integrate with Claude Code](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/) |
+| Kimi | `https://api.moonshot.cn/anthropic` | [在 Claude Code 中使用 Kimi](https://platform.kimi.com/docs/guide/claude-code-kimi) |
+| 智谱 GLM | `https://open.bigmodel.cn/api/anthropic` | [智谱：Claude API 兼容](https://docs.bigmodel.cn/cn/guide/develop/claude/introduction) |
+
+```bash
+# 以 DeepSeek 为例（Windows PowerShell 把 export 换成 $env:NAME="值"）
+export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+export ANTHROPIC_AUTH_TOKEN=<你的 DeepSeek API Key>
+claude
+```
+
+各家的模型名更新很快，`ANTHROPIC_MODEL` 等变量请按上面的官方文档填写。笔记质量取决于所接的模型，质量门禁 `validate_note.py` 会兜住格式下限。
 
 ## ⚙️ 配置
 
@@ -196,6 +226,7 @@ python scripts/upload_images.py "<笔记.md>" --apply
 ```
 ├── SKILL.md               # Agent Skills 规范定义：触发条件、三步工作流程、笔记模板
 ├── scripts/
+│   ├── doctor.py          # 环境自检：依赖 / 模型 / 设备 / 编码 / 加密软件 / 网络风控
 │   ├── bili_fetch.py      # B站：元数据 + 字幕抓取（--probe 只探元数据）
 │   ├── douyin_fetch.py    # 抖音：元数据 + 视频下载供转写（游客身份）
 │   ├── yt_fetch.py        # YouTube：元数据 + 字幕三级回退（无字幕按需下载音频）
@@ -227,7 +258,13 @@ python scripts/upload_images.py "<笔记.md>" --apply
 <details>
 <summary><b>需要什么环境？</b></summary>
 
-Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI Agent，如 Claude Code、Codex、ZCode。不需要 GPU，也不需要任何付费 API。
+Python 3.10+，以及任意一个支持 Agent Skills（`SKILL.md`）规范的 AI Agent，如 Claude Code、Codex、ZCode。不需要 GPU，也不需要任何付费 API。不确定装没装好，运行 `python scripts/doctor.py` 自检。
+</details>
+
+<details>
+<summary><b>脚本报编码错误 / 生成的笔记打开是乱码？</b></summary>
+
+如果电脑装了文件加密（防泄密）软件，用资源管理器或 PowerShell 复制的 `.py`、`.md` 文件会被加密，Python 读出来就是乱码。`doctor.py` 会检查出这种情况。解决办法：用 `git clone` 重新获取本 skill；仍不行，请 IT 把 `python.exe` 和你的 AI Agent 加入加密软件白名单。
 </details>
 
 <details>
