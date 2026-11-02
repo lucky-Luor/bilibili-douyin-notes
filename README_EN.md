@@ -171,7 +171,7 @@ Use the full share link (App → Share → Copy link) that carries `xsec_token`;
 <details>
 <summary><b>ASR is too slow?</b></summary>
 
-Use a smaller `asr_model` (e.g. `small` / `base`) in `config.json`, or set `asr_device: "cuda"` if you have an NVIDIA GPU. You can also transcribe a single part first (`--page 1`) to estimate the time.
+The default `small` model runs at about 0.2× the video length on a 6-core laptop CPU (a 26-minute lecture takes about 4 minutes). If you are in a hurry, set `asr_model` to `base` in `config.json`: about 3× faster, but noticeably less accurate (only 0.72–0.79 text agreement with `small` in our test). Set `asr_device: "cuda"` if you have an NVIDIA GPU. You can also transcribe a single part first (`--page 1`) to estimate the time.
 </details>
 
 <details>
@@ -193,7 +193,7 @@ Yes — faster-whisper is multilingual. Note that the note template and examples
 
 ## ⚠️ Known Limitations
 
-- Local transcription of long videos (>1 h) on CPU takes roughly 1–3× the video length; faster than real time with an NVIDIA GPU
+- Videos without subtitles need local ASR: measured at about 0.2× the video length on a 6-core laptop CPU (CPU int8; older CPUs are slower), faster with an NVIDIA GPU
 - ASR may garble technical terms — use `scripts/apply_glossary.py` to correct them
 - Douyin depends on the platform's signature algorithm and may break temporarily when the platform updates (detail API returns 403)
 - YouTube may block server / cloud IPs (cookies or a proxy needed); keep `yt-dlp` updated
