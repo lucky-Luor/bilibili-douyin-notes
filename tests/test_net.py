@@ -128,7 +128,9 @@ def test_screenshot_page_error_has_hint_and_rerun(tmp_path, monkeypatch, capsys)
     def boom(*a, **k):  # 模拟下载视频时被风控
         raise _hints.explain_http(412, "bilibili", "这一集没有截图，笔记照常生成")  # 三段式异常
     monkeypatch.setattr(bili_screenshot, "download_video", boom)  # 替换下载
-    bili_screenshot.main([str(mp), str(tmp_path), str(img_dir)])  # 运行
+    with pytest.raises(SystemExit) as ei:  # 唯一的分P失败 → 一张截图都没有 → 三段式退出
+        bili_screenshot.main([str(mp), str(tmp_path), str(img_dir)])  # 运行
+    assert "风控" in str(ei.value.code)  # 沿用单集失败的原因
     last = json.loads(capsys.readouterr().out.strip().splitlines()[-1])  # 最后一行进度
     assert last["status"] == "error" and last["impact"] == "这一集没有截图，笔记照常生成"  # 影响说清
     assert last["rerun"].endswith(f'"{img_dir}" 2')  # 只补跑第 2 集

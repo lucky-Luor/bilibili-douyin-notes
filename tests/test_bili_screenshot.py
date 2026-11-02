@@ -273,7 +273,7 @@ def _patterned(seed: int):
     return img  # 返回图片
 
 
-def _run_shots(tmp_path, monkeypatch, capsys, shots, txt, frame_for):
+def _run_shots(tmp_path, monkeypatch, capsys, shots, txt, frame_for, zero_exit=False):
     """清单模式跑 main()：frame_for(t) 决定每个抽帧时刻返回的图片。"""
     meta = {"bvid": "BV1xx411c7mD",
             "pages": [{"page": 1, "part": "P1", "cid": 1, "duration": 600}]}  # 单P元数据
@@ -291,8 +291,13 @@ def _run_shots(tmp_path, monkeypatch, capsys, shots, txt, frame_for):
                         lambda bvid, cid, dest, cookie="": dest.write_bytes(b"fake") or dest)  # 假下载
     monkeypatch.setattr(bili_screenshot, "grab_frames",
                         lambda video, times: [frame_for(t) for t in times])  # 按时刻给图
-    bili_screenshot.main([str(tmp_path / "metadata.json"), str(txt_dir), str(img_dir),
-                          "--shots", str(shots_path)])  # 跑清单模式
+    argv = [str(tmp_path / "metadata.json"), str(txt_dir), str(img_dir), "--shots", str(shots_path)]  # 清单模式参数
+    if zero_exit:  # 预期一张截图都没有：脚本应以三段式提示退出
+        with pytest.raises(SystemExit) as ei:  # 期望退出
+            bili_screenshot.main(argv)  # 跑清单模式
+        assert "原因：" in str(ei.value.code) and "下一步：" in str(ei.value.code)  # 三段式提示
+    else:  # 正常情况
+        bili_screenshot.main(argv)  # 跑清单模式
     manifest = json.loads((img_dir / "manifest.json").read_text(encoding="utf-8"))  # 读 manifest
     last = json.loads(capsys.readouterr().out.strip().splitlines()[-1])  # 末行进度
     return img_dir, manifest, last  # 返回
@@ -315,7 +320,7 @@ def test_shots_mode_rejects_invented_timestamp(tmp_path, monkeypatch, capsys):
     _, manifest, last = _run_shots(
         tmp_path, monkeypatch, capsys,
         shots=[{"page": 1, "section": 1, "t": "09:00", "caption": "虚构时刻"}],
-        txt="[00:10] 开场\n", frame_for=lambda t: _patterned(1))  # 09:00 转写稿里没有
+        txt="[00:10] 开场\n", frame_for=lambda t: _patterned(1), zero_exit=True)  # 09:00 转写稿里没有
     assert manifest["frames"] == []  # 没有截图
     assert last["failed"][0]["reason"] == "t_not_in_transcript"  # 原因明确
     assert last["status"] == "partial"  # 部分失败
@@ -354,3 +359,47 @@ def test_dhash_hamming_distinguishes_slides():
     a, b = _patterned(1), _patterned(2)  # 不同画面
     assert bili_screenshot.hamming(bili_screenshot.dhash(a), bili_screenshot.dhash(a)) == 0  # 同图距离 0
     assert bili_screenshot.hamming(bili_screenshot.dhash(a), bili_screenshot.dhash(b)) > bili_screenshot.DUP_HAMMING  # 不同图超阈值
+
+
+# ---------- W4：一句话回执 / 0 张截图明确报错 ----------
+
+def test_shot_summary_receipt_counts():
+    # 回执口径：剔除 = 重复 + 失败；画质未通过的已保留，单列待复核；整集失败列出集号
+    frames = [{"qc": "ok"}, {"qc": "dark"}]  # 2 张，其中 1 张待复核
+    s = bili_screenshot.shot_summary(frames, [{"reason": "no_frame"}], [{"duplicate_of": "a"}], {1: "partial", 3: "error"})  # 汇总
+    assert (s["frames"], s["dropped"], s["qc_review"], s["error_pages"]) == (2, 2, 1, [3])  # 数量
+    assert s["receipt"].startswith("截图 2 张，剔除坏帧 2 张")  # 一句话回执
+    assert "画质待复核 1 张" in s["receipt"] and "第 3 集" in s["receipt"]  # 附加说明
+
+
+@pytest.mark.parametrize("status,word", [("no_transcript", "转写稿"), ("no_anchor", "--shots"),
+                                         ("t_not_in_transcript", "grep"), ("partial", "换几个时刻")])
+def test_zero_shot_hint_by_main_cause(status, word):
+    # 0 张截图时按主要原因给出下一步
+    reason, impact, next_step, _ = bili_screenshot.zero_shot_hint({1: status}, None)  # 生成提示
+    assert reason and "没有截图" in impact and word in next_step  # 三段与下一步关键词
+
+
+def test_zero_shot_hint_all_error_reuses_page_hint():
+    # 全部整集失败：直接沿用单集失败的原因和下一步；一个分P都没处理时提示检查页码
+    rec = {"reason": "请求被B站风控拦截", "next_step": "换到家用网络"}  # 单集失败记录
+    assert bili_screenshot.zero_shot_hint({1: "error"}, rec)[0] == "请求被B站风控拦截"  # 沿用原因
+    assert "页码" in bili_screenshot.zero_shot_hint({}, None)[2]  # 没有分P被处理
+
+
+def test_main_writes_summary_and_prints_receipt(tmp_path, monkeypatch, capsys):
+    # 正常出图：manifest 带 summary，stderr 打一句话回执（_run_main 会读掉 stdout，这里另取 stderr）
+    _, manifest, _ = _run_main(tmp_path, monkeypatch, capsys)  # 跑一遍
+    assert manifest["summary"]["frames"] == 1  # 汇总写入 manifest
+    assert manifest["summary"]["receipt"].startswith("截图 1 张")  # 回执口径
+
+
+def test_main_zero_shots_exits_with_hint(tmp_path, monkeypatch):
+    # 要了截图却一张都没出（缺转写稿）：非 0 退出，给出原因 / 影响 / 下一步
+    meta = {"bvid": "BV1xx411c7mD", "pages": [{"page": 1, "part": "P1", "cid": 1, "duration": 600}]}  # 单分P
+    (tmp_path / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")  # 写 metadata
+    monkeypatch.setattr(bili_screenshot, "load_sessdata", lambda: "")  # 无登录态
+    with pytest.raises(SystemExit) as ei:  # 期望退出
+        bili_screenshot.main([str(tmp_path / "metadata.json"), str(tmp_path), str(tmp_path / "images")])  # 没有转写稿
+    text = str(ei.value.code)  # 退出文案
+    assert "原因：要截图的分P还没有转写稿" in text and "bili_transcribe.py" in text  # 原因与下一步
