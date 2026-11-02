@@ -110,3 +110,10 @@ def failure_record(exc: Exception, impact: str, rerun: str = "") -> dict:  # 单
     return {"error": format_hint(reason, impact, next_step, detail),  # 兼容字段：完整三段文案
             "reason": reason, "impact": impact or DEFAULT_IMPACT,  # 原因与影响
             "next_step": next_step, "rerun": rerun}  # 下一步与补跑命令
+
+
+def run_cli(main_fn):  # 命令行入口包装：未被捕获的 HintError 只打印三段文案，不打印堆栈
+    try:  # 正常执行主流程
+        return main_fn()  # 返回主流程结果
+    except HintError as e:  # 一路抛到顶层的可读失败
+        raise SystemExit(str(e)) from None  # 以三段文案退出（退出码 1），隐藏堆栈

@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
-from _hints import failure_record  # 单集失败的结构化提示
+from _hints import HintError, explain_bili_code, failure_record, run_cli  # 三段式提示
 
 # 国内网络默认走 HF 镜像；必须在 import huggingface 相关模块之前设置
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -66,9 +66,15 @@ def download_audio(bvid: str, cid: int, dest: Path, cookie: str = "") -> Path:
     """从 playurl 的 DASH 流中取最低码率音频（64k），存为 m4s（fMP4，PyAV 可直接解码）。"""
     url = f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&fnval=16"
     data = json.loads(http_get(url, cookie).decode("utf-8"))
-    if data.get("code") != 0:
-        raise RuntimeError(f"playurl 接口失败: code={data.get('code')} msg={data.get('message')}")
-    audios = data["data"]["dash"]["audio"]
+    if data.get("code") != 0:  # 业务码非 0：稿件失效、风控、需要登录等
+        raise explain_bili_code(data.get("code"), data.get("message") or "",  # 按业务码解释
+                                "这一集无法下载音频，不能语音识别")  # 影响
+    try:  # 未登录或接口结构变化时可能没有音频流
+        audios = data["data"]["dash"]["audio"]  # DASH 音频流列表
+    except (KeyError, TypeError) as e:  # 缺字段
+        raise HintError("B站没有返回这一集的音频流（可能需要登录，或接口结构已变）",  # 原因
+                        "这一集无法下载音频，不能语音识别",  # 影响
+                        "运行 bili_fetch.py --login 扫码登录后重试；仍不行请提 issue", f"bvid={bvid} cid={cid}") from e  # 下一步
     best = min(audios, key=lambda a: a["bandwidth"])  # 做笔记无需高音质，越小越快
     audio_url = best["baseUrl"] or best["base_url"]
     _net.download_to(audio_url, _net.bili_headers(cookie), dest,  # 流式下载；4xx / 断线转成三段式提示
@@ -322,4 +328,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)  # 顶层失败只打印原因 / 影响 / 下一步

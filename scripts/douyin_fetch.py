@@ -30,7 +30,7 @@
 更新 abogus.py 或 WEB_SIGN_SALT。
 """
 import hashlib
-import http.client
+from http.client import IncompleteRead  # 直接导入类：下方 def http() 会覆盖 http 这个模块名
 import json
 import os
 import random
@@ -41,6 +41,9 @@ import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import quote, urlencode
+
+from _hints import HintError, explain_douyin_filter, explain_http, hint_exit, run_cli  # 三段式提示
+from _net import NETWORK_NEXT_STEP  # 网络类失败的统一下一步
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -92,7 +95,8 @@ def extract_video_id(text: str) -> str:
         re.search(r"^(\d{15,})$", text.strip())
     if m:
         return m.group(1)
-    raise SystemExit(f"无法从输入中解析抖音视频ID: {text[:100]}")
+    hint_exit("无法从输入中解析抖音视频 ID", "无法开始",  # 原因与影响
+              "把完整的抖音分享链接或整段分享文本（含 v.douyin.com 短链）发过来", text[:100])  # 下一步与原始输入
 
 
 def get_ttwid() -> str:
@@ -103,7 +107,8 @@ def get_ttwid() -> str:
     m = re.search(r"ttwid=([^;]+)", resp.headers.get("Set-Cookie", "")) or \
         re.search(r'"ttwid":"?([^",}]+)', body)
     if not m:
-        raise RuntimeError(f"ttwid 注册失败: {body[:200]}")
+        raise HintError("抖音游客身份获取失败（ttwid 接口没有返回有效值）", "无法获取作品信息",  # 原因与影响
+                        "稍后重试；开了代理的话确认代理可用", body[:200])  # 下一步与原始响应
     log("[1] ttwid OK")
     return m.group(1)
 
@@ -183,15 +188,22 @@ def fetch_aweme_detail(aweme_id: str) -> dict:
             resp = http(url, headers=headers)
             data = json.loads(resp.read().decode())
             break
-        except (http.client.IncompleteRead, urllib.error.URLError,
+        except urllib.error.HTTPError as e:  # 服务器返回了状态码
+            if e.code < 500:  # 4xx：风控或权限问题，重试没有意义
+                raise explain_http(e.code, "douyin", "无法获取作品信息") from e  # 三段式提示
+            if attempt == 2:  # 5xx 重试用尽
+                raise explain_http(e.code, "douyin", "无法获取作品信息") from e  # 按状态码解释
+            log(f"[2] transient error ({e}), retry {attempt + 2}/3")  # 5xx 继续重试
+            time.sleep(2)  # 等待后重试
+        except (IncompleteRead, urllib.error.URLError,  # 响应不完整、网络错误
                 json.JSONDecodeError, TimeoutError) as e:
-            if attempt == 2:
-                raise
+            if attempt == 2:  # 重试用尽
+                raise HintError("连不上抖音（重试 3 次仍超时、连接中断或返回内容不完整）",  # 原因
+                                "无法获取作品信息", NETWORK_NEXT_STEP, f"{type(e).__name__}: {e}") from e  # 影响与下一步
             log(f"[2] transient error ({e}), retry {attempt + 2}/3")
             time.sleep(2)
     if not (data or {}).get("aweme_detail"):
-        raise RuntimeError(f"detail 接口无 aweme_detail（可能签名算法已失效，见文件头说明）: "
-                           f"{json.dumps(data, ensure_ascii=True)[:300]}")
+        raise explain_douyin_filter(data, "无法生成这条笔记")  # 区分“作品已删除 / 不可见”和“签名失效”
     return data["aweme_detail"]
 
 
@@ -203,7 +215,8 @@ def pick_video_url(detail: dict):
     dl = detail["video"].get("download_addr", {}).get("url_list") or []  # 下载地址列表
     if dl:  # 没有播放地址时用下载地址兜底
         return dl[0], "download_addr"
-    raise RuntimeError("detail 里没有视频下载地址")
+    raise HintError("作品数据里没有视频下载地址（抖音接口返回结构可能已变化）", "无法下载视频",  # 原因与影响
+                    "换一个作品试试；都不行请提 issue 附上这个链接")  # 下一步
 
 
 # 图集/图文类 aweme_type：68=图集(多图)，150=图文
@@ -217,7 +230,7 @@ def check_not_album(detail: dict):
     has_video_addr = bool((video.get("play_addr") or {}).get("url_list")
                           or (video.get("download_addr") or {}).get("url_list"))
     if (images and not has_video_addr) or detail.get("aweme_type") in ALBUM_AWEME_TYPES:
-        raise SystemExit("这是图集帖（图文），本工具只处理视频，请换一个视频链接再试。")
+        hint_exit("这是图集帖（图文），本工具只处理视频", "无法生成这条笔记", "请换一个视频链接再试")  # 三段式退出
 
 
 def download(url: str, dest: Path) -> int:
@@ -225,7 +238,11 @@ def download(url: str, dest: Path) -> int:
     part = dest.with_name(dest.name + ".part")
     log(f"[3] downloading -> {dest.name}")
     n = 0
-    resp = http(url, headers={"User-Agent": UA, "Referer": "https://www.douyin.com/"})
+    try:  # 下载地址有时效，过期常见 403
+        resp = http(url, headers={"User-Agent": UA, "Referer": "https://www.douyin.com/"})
+    except urllib.error.HTTPError as e:  # 服务器拒绝或地址失效
+        raise explain_http(e.code, "douyin", "这条视频没有下载下来",  # 三段式提示
+                           "下载地址可能已过期：重跑本脚本会重新解析地址") from e  # 详情补充原因
     with open(part, "wb") as f:
         while chunk := resp.read(1 << 16):
             f.write(chunk)
@@ -275,7 +292,9 @@ def main():
         vurl, source_kind = pick_video_url(detail)
         n = download(vurl, media)
         if n < 100 * 1024:
-            raise RuntimeError(f"下载的文件过小({n}字节)，可能被风控，请重试")
+            raise HintError(f"下载的文件过小（{n} 字节），不是完整视频，多半被风控拦截",  # 原因
+                            "这条视频没有音频，无法转写和截图",  # 影响
+                            "等几分钟后重跑；仍不行换个网络，或提 issue 附上这个链接")  # 下一步
         log(f"[3] downloaded {n} bytes ({source_kind})")
 
     meta = {
@@ -308,4 +327,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)  # 顶层失败只打印原因 / 影响 / 下一步

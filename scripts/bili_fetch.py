@@ -40,7 +40,7 @@ import urllib.request
 from pathlib import Path
 
 import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
-from _hints import failure_record  # 单集失败的结构化提示
+from _hints import explain_bili_code, failure_record, hint_exit, run_cli  # 三段式提示
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -193,8 +193,8 @@ def http_get(url: str, cookie: str = "", retries: int = RETRIES) -> bytes:
 def api(url: str, cookie: str = "") -> dict:
     """请求B站 API 并校验业务 code，失效视频/风控给出可读报错而非裸 KeyError。"""
     data = json.loads(http_get(url, cookie).decode("utf-8"))
-    if data.get("code") != 0:
-        raise RuntimeError(f"接口失败 code={data.get('code')}: {data.get('message')} ({url[:80]})")
+    if data.get("code") != 0:  # 业务码非 0：稿件不可见、风控、未登录等
+        raise explain_bili_code(data.get("code"), data.get("message") or "", "无法获取视频信息或字幕")  # 三段式提示
     return data
 
 
@@ -208,7 +208,8 @@ def extract_bvid(text: str) -> str:
         m = re.search(r"(BV[0-9A-Za-z]{10})", final_url)
         if m:
             return m.group(1)
-    raise SystemExit(f"无法从输入中解析BV号: {text}")
+    hint_exit("无法从输入中解析 BV 号", "无法开始",  # 原因与影响
+              "把完整的 B站视频链接（含 BV 号）或 b23.tv 分享链接发过来", text[:100])  # 下一步与原始输入
 
 
 def fmt_ts(sec) -> str:
@@ -473,4 +474,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)  # 顶层失败只打印原因 / 影响 / 下一步
