@@ -74,19 +74,21 @@ def _detail(play_urls=None, dl_urls=None):
     return {"video": video}
 
 
-def test_pick_video_url_prefers_no_watermark():
-    url, kind = douyin_fetch.pick_video_url(
-        _detail(play_urls=["https://aweme.snssdk.com/aweme/v1/playwm/?x"],
-                dl_urls=["https://x/download"]))
-    assert "/playwm/" not in url and "/play/" in url
-    assert "no watermark" in kind
+def test_pick_video_url_uses_play_addr_as_is():
+    # 播放地址按接口原样返回，不再把 /playwm/ 改写成 /play/（不做去水印）
+    src = "https://aweme.snssdk.com/aweme/v1/playwm/?x"  # 接口返回的原始播放地址
+    url, kind = douyin_fetch.pick_video_url(  # 同时给播放地址和下载地址
+        _detail(play_urls=[src], dl_urls=["https://x/download"]))
+    assert url == src  # 地址未被改写
+    assert kind == "play_addr"  # 来源标记为播放地址
 
 
 def test_pick_video_url_falls_back_to_download_addr():
-    url, kind = douyin_fetch.pick_video_url(
+    # 没有播放地址时用下载地址兜底，同样原样返回
+    url, kind = douyin_fetch.pick_video_url(  # 只给下载地址
         _detail(dl_urls=["https://x/download"]))
-    assert url == "https://x/download"
-    assert "watermarked" in kind
+    assert url == "https://x/download"  # 原样返回下载地址
+    assert kind == "download_addr"  # 来源标记为下载地址
 
 
 def test_pick_video_url_none_raises():
