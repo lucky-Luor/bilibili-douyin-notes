@@ -9,7 +9,7 @@ from datetime import datetime, timezone  # 生成带时区的时间戳
 from pathlib import Path  # 处理课程目录
 
 import bili_fetch  # 复用抓取接口和共享转写比例
-from _hints import HintError, run_cli  # 复用三段式错误提示和入口包装
+from _hints import HintError, hint_exit, run_cli  # 复用三段式错误提示和入口包装
 
 NOTE_SECONDS = 90  # 每集笔记的预计整理时间
 FETCH_SECONDS_PER_ITEM = 5  # 每集抓取的预计时间
@@ -345,6 +345,136 @@ def status(root):  # 只读查询当前范围的进度
     return {"course": True, "root": str(Path(root)), "source_url": course["source_url"], "kind": course["kind"], "title": course.get("title", ""), "scope": copy.deepcopy(course["scope"]), "counts": counts, "failed_items": [copy.deepcopy(item) for item in items if item["status"] == "failed"], "items": copy.deepcopy(items), "remaining_seconds": remaining_seconds(course)}  # 返回完整的只读进度回执
 
 
+def script_argv(name, *args):  # 为 Agent 提供不经 shell 解析的参数数组
+    return [sys.executable, str(Path(__file__).resolve().parent / name), *(str(arg) for arg in args)]  # 使用当前解释器和绝对脚本路径
+
+
+def command_text(argv):  # 展示命令始终给参数加引号
+    return " ".join('"' + value.replace("\\", "/").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`") + '"' for value in argv)  # 实际执行优先使用参数数组
+
+
+def _note_path(root, course, item):  # 默认按讲义编号命名并对重复标题消歧
+    if item.get("note"):  # 补跑时保留已有笔记位置
+        return root / item["note"]  # 已保存路径相对课程目录
+    def filename(entry):  # 统一生成候选文件名
+        title = bili_fetch.safe_name(entry["title"])  # 先清洗视频标题中的非法字符
+        match = re.match(r"^(\d+\.\d+)(?:[\s.、_\-]+|$)(.*)", title)  # 识别章节式编号
+        prefix, topic = (match.group(1), match.group(2).strip()) if match else (f'{entry["index"]:03d}', title)  # 其它标题使用全局序号
+        return f'{prefix}-{topic or "未命名"}.md'  # 保证主题非空
+    name = filename(item)  # 先采用方案规定的文件名
+    collisions = [entry for entry in course["items"] if filename(entry).casefold() == name.casefold()]  # Windows 同名比较不区分大小写
+    if len(collisions) > 1:  # 合集中不同视频可能拥有相同讲义编号
+        name = f'{item["index"]:03d}-{name}'  # 用全局序号避免相互覆盖
+    return root / "notes" / name  # 产物统一放在课程目录中
+
+
+def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
+    root = Path(root).resolve()  # 将所有输出路径变成绝对路径
+    course = load_course(root)  # 读取唯一状态来源
+    if not course["scope"].get("mode"):  # 未得到用户选择不得开始
+        hint_exit("尚未确认课程范围", "本次不会开始制作笔记", "先向用户展示确认文案，再运行 start 选择范围")  # 给出恢复步骤
+    chosen = selected_items(course)  # 历史完成状态与当前范围分开计算
+    item = next((entry for entry in chosen if entry["status"] == "running"), None)  # 中断后优先继续原来的一集
+    if item is None:  # 没有未完成的运行中任务
+        item = next((entry for entry in chosen if entry["status"] == "pending"), None)  # 按课程序号取下一集
+    counts = {state: sum(entry["status"] == state for entry in chosen) for state in ("done", "failed")}  # 仅统计范围内结果
+    if item is None:  # 失败集不会自动重试造成无限循环
+        return {"status": "finished", **counts, "failed_items": [entry["index"] for entry in chosen if entry["status"] == "failed"]}  # 汇总本轮执行
+    if item["status"] != "running":  # 首次交出时才设置开始时间
+        item.update(status="running", started_at=now())  # 重复 next 不覆盖计时起点
+        save_course(root, course)  # 原子保存后再交出命令
+    folder = root / "videos" / item["bvid"]  # 同一 BV 共享一次抓取结果
+    metadata = folder / "metadata.json"  # 与现有单视频流程目录一致
+    fetched, page, completed = metadata.is_file(), None, False  # 首轮尚未抓取时必须输出转写步骤
+    if fetched:  # 已有元数据必须校验归属与目标分P
+        try:  # 文件内容出错不能伪装成已完成
+            meta = json.loads(metadata.read_text(encoding="utf-8"))  # 元数据按 UTF-8 读取
+            page = next((entry for entry in meta["pages"] if entry["page"] == item["page"] and entry["cid"] == item["cid"]), None)  # 校验页码和音频身份
+            if meta.get("bvid") != item["bvid"] or page is None:  # 阻止过期或错配元数据
+                raise ValueError("BV号或目标分P与课程清单不一致")  # 由三段提示报告原因
+            text = folder / f'{page["page"]:02d}_{bili_fetch.safe_name(page["part"])}.txt'  # 只使用目标正式字幕文件
+            if text.is_file():  # 孤立完成标记不能让文本缺失的集被跳过
+                from bili_transcribe import txt_done  # 不加载 faster-whisper 等重型依赖
+                completed = page.get("subtitle_detail") in ("cc", "ai") or txt_done(folder, page)  # 兼容旧转写稿并复用原判据
+        except (OSError, ValueError, KeyError, TypeError) as exc:  # 所有可预期文件错误都给恢复提示
+            raise HintError("已有视频元数据不可用", "这一集暂时无法生成正确的执行步骤", f"核对并重新抓取 {metadata}，或将本集 mark 为 failed 后继续", str(exc)) from None  # 保留 running 以便定位和恢复
+    note = _note_path(root, course, item)  # 生成确定且不冲突的输出路径
+    try:  # 笔记目录由编排器预先建立
+        note.parent.mkdir(parents=True, exist_ok=True)  # 支持新课程及多级目录
+    except OSError as exc:  # 写权限失败使用统一提示
+        raise HintError("无法创建笔记目录", "这一集尚未开始写笔记", "检查目录权限后重试 next", str(exc)) from None  # 不产生误完成状态
+    fetch = script_argv("bili_fetch.py", item["bvid"], folder)  # 抓取命令只针对当前 BV
+    transcribe = script_argv("bili_transcribe.py", metadata, "--page", item["page"])  # ASR 一次只处理这一集
+    common = [note, "--meta", metadata, "--txt-dir", folder, "--page", item["page"], "--template", "v4"]  # 导航与门禁使用同一页码
+    nav, validate = script_argv("note_nav.py", *common), script_argv("validate_note.py", *common)  # 按先导航后最终门禁顺序执行
+    steps = [  # 脚本不执行这些命令，交给 Agent 串行处理
+        {"kind": "fetch", "skip": fetched, "cmd": command_text(fetch), "argv": fetch, "why": "这个视频已抓取过（metadata.json 已存在）" if fetched else "首次处理这个视频，先抓取元数据和字幕"},  # 同 BV 不重复抓取
+        {"kind": "transcribe", "skip": completed, "cmd": command_text(transcribe), "argv": transcribe, "why": "这一集已有可信字幕或完成的转写稿" if completed else "抓取后按 subtitle_detail 决定：cc / ai 且正式文本存在则跳过，否则仅转写这一集"},  # 探测提示不是实际字幕产出的保证
+        {"kind": "note", "note_path": str(note), "txt_dir": str(folder), "metadata": str(metadata), "nav_cmd": command_text(nav), "nav_argv": nav, "validate_cmd": command_text(validate), "validate_argv": validate},  # 笔记按原模板要求制作
+    ]  # 每集固定三个阶段
+    return {"status": "next", "index": item["index"], "total_in_scope": len(chosen), **counts, "item": dict(item), "steps": steps}  # 返回快照避免调用方误改持久状态
+
+
+def mark(root, index, state, note=None, reason=None, next_step=None, rerun=None):  # 回报单集结果并输出人类可读进度
+    from _hints import failure_record  # 与其它脚本共享单集失败记录结构
+    from datetime import datetime  # 课程时间使用已有秒级时间格式
+    root = Path(root).resolve()  # 补跑命令与笔记定位不依赖工作目录
+    course = load_course(root)  # 每次重新读取最新清单
+    item = next((entry for entry in course["items"] if entry["index"] == index), None)  # 全局序号不随选择范围变化
+    if item is None or state not in ("done", "failed", "pending"):  # API 调用与 CLI 一致校验
+        hint_exit("集序号或结果状态无效", "本次没有修改课程清单", "使用 status 查看序号，并选择 done、failed 或 pending")  # 明确支持的状态
+    if state == "done":  # 存在笔记才允许回报成功
+        path = Path(note) if note else Path("")  # 缺省值留给统一校验
+        if note and not path.is_absolute():  # 支持相对课程目录路径
+            path = root / path  # 相对路径有明确基准
+        try:  # 约束课程笔记路径便于 I4 相对引用
+            relative = path.resolve().relative_to(root)  # 拒绝把课程外文件伪装为课程产物
+        except ValueError:  # 相对引用不可成立
+            hint_exit("笔记路径不在课程目录内", "这一集尚未标记完成", "把笔记放入课程 notes 目录后重新 mark")  # 不移动或覆盖外部文件
+        if not note or not path.is_file():  # 目录不能冒充笔记文件
+            hint_exit("笔记文件不存在", "这一集尚未标记完成", "先完成笔记与门禁，再通过 --note 指定真实文件")  # 门禁是否通过由 Agent 负责
+        item["note"] = relative.as_posix()  # 存储跨平台相对路径
+    if state == "failed" and not (reason or "").strip():  # 失败必须附有可操作原因
+        hint_exit("标记失败时缺少原因", "本次没有修改课程清单", "通过 --reason 填写失败原因，可附 --next-step")  # 禁止空白原因
+    if state == "pending":  # 手工补跑清空结果而不改集身份
+        for key in ("note", "started_at", "finished_at", "seconds", "reason", "next_step", "rerun"):  # 只重置执行相关字段
+            item[key] = None  # 下一次 next 会重新计时
+    else:  # 成功和失败都记录结束时刻及可用耗时
+        finished = now()  # 一次读取保证字段一致
+        item["finished_at"] = finished  # 记录这一轮结束时间
+        _number(item.get("seconds"), "实际耗时")  # 损坏的历史耗时不能参与计算
+        try:  # 统一转换旧清单中损坏的日期
+            elapsed = (datetime.fromisoformat(finished) - datetime.fromisoformat(item["started_at"])).total_seconds() if item.get("started_at") else None  # 手工标记不凭空制造耗时
+        except (TypeError, ValueError):  # 清单日期格式不合法时给可读错误
+            raise HintError("课程开始时间无效", "本次未修改课程清单", "核对 started_at 或将本集标记 pending 后重试") from None  # 不输出内部日期堆栈
+        item["seconds"] = max(0, elapsed) if elapsed is not None else None  # 系统时钟回拨时不保存负数
+        if state == "failed":  # 三段字段由统一工具生成
+            rerun = rerun or command_text(script_argv("course_plan.py", "mark", root, index, "pending"))  # 默认只将这一集放回待办
+            rec = failure_record(HintError(reason.strip(), "这一集没有完成，后续集将继续处理", next_step or "按补跑命令重试这一集"), "这一集没有完成")  # 使用统一原因和恢复文案
+            rec["rerun"] = rerun  # 补跑命令独立保存，避免重复混入下一步字段
+            item.update({key: rec[key] for key in ("reason", "next_step", "rerun")})  # 使用 I4 预留字段
+        else:  # 成功后清除过去失败记录
+            item.update(reason=None, next_step=None, rerun=None)  # 不保留过期补跑提示
+    item["status"] = state  # 校验结束后才改变状态
+    save_course(root, course)  # 只用原子写更新清单
+    chosen = selected_items(course)  # 进度独立计算当前选定范围
+    done = sum(entry["status"] == "done" for entry in chosen)  # 范围外历史结果不计入本次进度
+    failed = sum(entry["status"] == "failed" for entry in chosen)  # 只统计本轮失败
+    position = next((i for i, entry in enumerate(chosen, 1) if entry["index"] == index), index)  # 指定范围从第一集开始显示进度
+    remaining = remaining_seconds(course)  # 完成集平均耗时或初始公式
+    if state == "failed":  # 失败明确说明会继续
+        progress = f'[{position}/{len(chosen)}] ❌ {item["title"]}：{item["reason"]}｜下一步：{item["next_step"]}；已记录，继续下一集'  # 可原样转述给用户
+    elif state == "done":  # 成功显示视频时长与实际耗时
+        seconds = int(item["seconds"] or 0)  # 手工标记时显示零秒而不参与平均耗时
+        duration = int(item["duration"])  # 展示整秒时长
+        progress = f'[{position}/{len(chosen)}] ✅ {item["title"]}（{duration // 60} 分 {duration % 60:02d} 秒的视频，用时 {seconds // 60} 分 {seconds % 60:02d} 秒）｜已完成 {done}，失败 {failed}，剩余约 {math.ceil(remaining / 60)} 分钟'  # 进度行保持单行
+    else:  # 补跑也向用户报告状态
+        progress = f'[{position}/{len(chosen)}] ⏳ {item["title"]}：已放回待处理｜已完成 {done}，失败 {failed}，剩余约 {math.ceil(remaining / 60)} 分钟'  # 不误报制作成功
+    progress = progress.replace("\n", " ").replace("\r", " ")  # 外部标题与原因不能破坏单行进度
+    print(progress, file=sys.stderr)  # stdout 保持机器摘要
+    return {"index": index, "status": state, "done": done, "failed": failed, "remaining_seconds": remaining, "progress": progress}  # main 最后统一打印 JSON
+
+
 class _Parser(argparse.ArgumentParser):  # 让参数错误沿用项目三段式提示
     def error(self, message):  # 替换默认的英文用法错误出口
         raise _error(f"命令行参数错误：{message}", "运行 course_plan.py --help 查看 plan/start/status 用法")  # 由统一入口处理而不打印堆栈
@@ -374,11 +504,21 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
     choices.add_argument("--all", dest="all_", action="store_true")  # 选择全部时执行规模门禁
     status_parser = commands.add_parser("status", help="只读查询当前范围进度")  # 定义只读查询子命令
     status_parser.add_argument("root", metavar="ROOT")  # 接受清单根目录
+    next_parser = commands.add_parser("next", help="交出下一集执行步骤")  # 串行编排只产生命令
+    next_parser.add_argument("root", metavar="ROOT")  # 从清单恢复执行状态
+    mark_parser = commands.add_parser("mark", help="记录单集结果或补跑")  # 所有结果写入唯一清单
+    mark_parser.add_argument("root", metavar="ROOT")  # 课程根目录
+    mark_parser.add_argument("index", type=int)  # 全局集序号
+    mark_parser.add_argument("state", choices=("done", "failed", "pending"))  # 只开放三种回报状态
+    mark_parser.add_argument("--note")  # 成功笔记路径
+    mark_parser.add_argument("--reason")  # 单集失败原因
+    mark_parser.add_argument("--next-step")  # 面向用户的恢复步骤
+    mark_parser.add_argument("--rerun")  # 可选显式补跑命令
     try:  # 参数和文件错误统一生成可读提示
         args = parser.parse_args(argv)  # 支持调用者提供参数列表
         options = vars(args).copy()  # 生成业务函数关键字参数
         command = options.pop("command")  # 子命令名称不传入业务函数
-        result = {"plan": plan, "start": start, "status": status}[command](**options)  # 分发并获取结构化结果
+        result = {"plan": plan, "start": start, "status": status, "next": course_next, "mark": mark}[command](**options)  # 分发并获取结构化结果
     except HintError as exc:  # 已经具备三段式信息的错误
         print(json.dumps({"status": "error", **exc.to_dict()}, ensure_ascii=False))  # 即使失败也保留末行机器可读 JSON
         raise  # 交给公共入口包装输出人类提示
