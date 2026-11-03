@@ -153,7 +153,8 @@ def test_next_orders_pending_and_skips_completed(course):  # 完成集不会再�
         assert [step["kind"] for step in result["steps"]] == ["fetch", "transcribe", "note"]  # 交接顺序固定为抓取转写及笔记
         marked = cp.mark(root, index, "done", note=str(note))  # 回报后才允许推进
         assert marked["done"] == index  # 完成数逐集累加
-    assert cp.course_next(root) == {"status": "finished", "done": 4, "failed": 0, "failed_items": [], "reopened": []}  # 全部完成后不再交出命令
+    finished = cp.course_next(root)  # 完成回执新增索引与缓存信息
+    assert {key: finished[key] for key in ("status", "done", "failed", "failed_items", "reopened")} == {"status": "finished", "done": 4, "failed": 0, "failed_items": [], "reopened": []}  # 保留原有全部完成及门禁恢复断言
 
 
 def test_failed_item_records_default_pending_rerun_and_continues(course):  # 单集失败不会阻断后续课程
@@ -219,7 +220,8 @@ def test_scope_counts_and_completion_exclude_outside_items(course, selection, ex
         assert result["done"] == position and result["failed"] == 0  # 只计入范围内已回报结果
         marked = cp.mark(root, index, "done", note=str(note))  # 完成一集推进局部进度
         assert marked["progress"].startswith(f"[{position + 1}/2]")  # 进度序号按范围内位置显示
-    assert cp.course_next(root) == {"status": "finished", "done": 2, "failed": 0, "failed_items": [], "reopened": []}  # 范围外结果不改变本轮结束摘要
+    finished = cp.course_next(root)  # 新回执包含绝对索引路径等附加字段
+    assert {key: finished[key] for key in ("status", "done", "failed", "failed_items", "reopened")} == {"status": "finished", "done": 2, "failed": 0, "failed_items": [], "reopened": []}  # 范围外结果不改变本轮结束及恢复摘要
     assert cp.status(root)["counts"]["total"] == 2  # 只读状态采用相同范围口径
 
 
@@ -422,7 +424,8 @@ def test_finished_and_status_preserve_failures_without_retry(course):  # 本轮�
         else:  # 其余两集正常完成
             cp.mark(root, index, "done", note=str(note))  # 完成数应独立累计
     before = (root / "course.json").read_bytes()  # 结束查询不得重写状态
-    assert cp.course_next(root) == {"status": "finished", "done": 2, "failed": 2, "failed_items": [2, 4], "reopened": []}  # 无待办时用序号列表回报失败项
+    finished = cp.course_next(root)  # 新结束回执额外提供索引及失败补跑文案
+    assert {key: finished[key] for key in ("status", "done", "failed", "failed_items", "reopened")} == {"status": "finished", "done": 2, "failed": 2, "failed_items": [2, 4], "reopened": []}  # 无待办时仍用序号列表回报失败及恢复项
     status = cp.status(root)  # 状态命令另外提供完整失败记录
     assert status["counts"]["done"] == status["counts"]["failed"] == 2  # 状态摘要与结束回执一致
     assert [item["index"] for item in status["failed_items"]] == [2, 4]  # 失败详情保持课程顺序

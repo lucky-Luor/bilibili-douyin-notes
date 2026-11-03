@@ -8,8 +8,10 @@ import sys  # 配置终端编码并输出提示
 import time  # 控制字幕探测间隔
 from datetime import datetime, timezone  # 生成带时区的时间戳
 from pathlib import Path  # 处理课程目录
+from urllib.parse import quote  # 编码可点击的相对笔记链接
 
 import bili_fetch  # 复用抓取接口和共享转写比例
+import clean_media  # 复用已有媒体候选收集规则
 from doctor import load_config  # 复用既有标准库配置读取工具
 from _hints import HintError, hint_exit, run_cli  # 复用三段式错误提示和入口包装
 
@@ -364,12 +366,135 @@ def start(root, first=None, range_=None, all_=False, scope=None, template=None):
     return result  # 不在业务函数中打印输出
 
 
+INDEX_FILE = "课程索引.md"  # 根目录索引采用固定的纯Markdown文件名
+MEDIA_SUFFIXES = {".m4s", ".m4a", ".mp4", ".mp3", ".wav", ".flac", ".aac", ".ogg", ".opus", ".webm", ".mkv", ".mov", ".avi", ".ts", ".flv"}  # 仅认可实际音视频缓存类型
+
+
+def _md_link_path(path):  # 按路径保留中文并编码RFC3986非保留字符
+    return "".join(char if "\u4e00" <= char <= "\u9fff" else quote(char, safe="/-._~") for char in str(path).replace("\\", "/"))  # 避免空格加号括号和百分号破坏Markdown链接
+
+
+def _md_text(value):  # 清理外部文本以保持Markdown表格与列表结构
+    return str(value or "").replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ")  # 保留标题内容并转义表格分隔符
+
+
+def _clock_text(seconds):  # 索引视频时长采用分秒或时分秒格式
+    total = int(_number(seconds))  # 时长统一为非负整秒
+    return f"{total // 3600}:{total // 60 % 60:02d}:{total % 60:02d}" if total >= 3600 else f"{total // 60:02d}:{total % 60:02d}"  # 小时出现时分秒补齐两位
+
+
+def write_index(root, course) -> Path:  # 从当前清单生成纯Markdown课程索引
+    root = Path(root)  # 接受字符串及路径对象
+    chosen = selected_items(course)  # 目录和执行进度仅采用所选范围
+    counts = {state: sum(item["status"] == state for item in chosen) for state in ("done", "failed", "pending", "running")}  # 分别统计各执行状态
+    kind = "B站" if course["kind"] == "pages" else "合集"  # 区分分P课程和合集课程
+    lines = [f"> 课程：{_md_text(course.get('title'))}（{kind}，UP主：{_md_text(course.get('owner'))}）", f"> 来源：{course['source_url']}", f"> 进度：完成 {counts['done']}/{len(chosen)}，失败 {counts['failed']}，待做 {counts['pending']}，进行中 {counts['running']}；总集 {len(course['items'])}，约 {estimate(course['items'])['hours']:.1f} 小时；更新时间：{now()}", "", "## 目录", ""]  # 头部只用引用块而不写前置元数据
+    section = None  # 合集每次章节变化时重新开表
+    header = ["| 序号 | 标题 | 时长 | 状态 | 笔记 | 视频 |", "| --- | --- | --- | --- | --- | --- |"]  # 表头顺序固定便于阅读与解析
+    if course["kind"] == "pages":  # 分P目录不展示章节小标题
+        lines.extend(header)  # 单表覆盖所选分P
+    for item in chosen:  # 保持清单的全局课程序号
+        if course["kind"] == "season" and item.get("section", "") != section:  # 合集按原始章节连续分组
+            section = item.get("section", "")  # 空章节也有可读的默认标题
+            lines.extend([f"### {_md_text(section) or '未分组'}", "", *header])  # 每个章节独立表头
+        label = {"done": "✅ 完成", "failed": "❌ 失败", "running": "🔄 进行中", "pending": "⏳ 待做", "out_of_scope": "⏳ 待做"}[item["status"]]  # 不按结果状态反推选择范围
+        if item["status"] == "pending" and str(item.get("reason") or "").startswith("笔记门禁未通过"):  # 仅待办门禁恢复项显示需要修改
+            label = "⏳ 待修改"  # 不覆盖失败或运行中的实际状态
+        note = f"[笔记]({_md_link_path(item['note'])})" if item.get("note") else "—"  # 仅引用已记录的正式相对笔记路径
+        video = f"https://www.bilibili.com/video/{item['bvid']}?p={item['page']}"  # 每行都定位到真实分P
+        lines.append(f"| {item['index']} | {_md_text(item['title'])} | {_clock_text(item['duration'])} | {label} | {note} | [视频]({video}) |")  # 所有动态单元格保持单行
+    lines.extend(["", "## 失败与补跑", ""])  # 恢复信息与目录分开便于执行
+    failed = [item for item in chosen if item["status"] == "failed"]  # 不展示范围外历史失败
+    for item in failed:  # 每个失败完整保留三个恢复字段
+        lines.append(f"+ 第 {item['index']} 集 {_md_text(item['title'])}；原因：{_md_text(item.get('reason'))}；下一步：{_md_text(item.get('next_step'))}")  # 失败原因与恢复步骤采用中文标签
+        lines.append(f"  补跑：`{str(item.get('rerun') or '').replace(chr(13), ' ').replace(chr(10), ' ')}`")  # 下一行保留可直接复制的反引号补跑命令
+    if not failed:  # 无失败时明确当前结果
+        lines.append("无失败集。")  # 不虚构补跑命令
+    lines.extend(["", "## 未选择的集", "", f"共 {len(course['items']) - len(chosen)} 集；可运行 start {command_text([str(root.resolve())])} --range A-B 选择范围。", ""])  # 未选章节仅提供数量及范围命令
+    path = root / INDEX_FILE  # 固定根目录索引位置
+    try:  # 将写入失败转换为统一提示
+        bili_fetch.atomic_write_text(path, "\n".join(lines))  # 复用已有临时文件及原子替换实现
+    except OSError as exc:  # 文件权限和磁盘异常不能伪装成成功
+        raise _error(f"无法写入课程索引：{exc}", "检查课程目录权限后运行 index ROOT 重建索引") from None  # 课程清单仍可用于重建
+    return path  # 按接口约定返回Path对象
+
+
+def index(root):  # 命令行主动重建当前课程索引
+    root = Path(root).resolve()  # 命令回执始终采用绝对路径
+    return {"index_file": str(write_index(root, load_course(root)))}  # 读取真实清单并返回索引位置
+
+
+def _cache_candidates(root):  # 为干跑和实际删除共同收集并预检媒体候选
+    root = Path(root).resolve()  # 课程根目录是唯一安全边界
+    videos = root / "videos"  # 只遍历课程视频缓存目录
+    def within(path, boundary):  # 跟随符号链接后检查候选仍属于给定目录
+        resolved = path.resolve()  # 绝对路径点点和符号链接使用同一套判断
+        if not resolved.is_relative_to(boundary):  # 越界必须明确拒绝而非静默忽略
+            raise HintError(f"拒绝清理 videos 目录外路径：{path}", "本次未删除任何缓存", "修正视频目录链接或 metadata.media_path 后重试 clean")  # 所有预检结束前不删除
+        return resolved  # 返回解析后的身份用于去重和产物保护
+    boundary = within(videos, root)  # 即使videos本身指向课程外也必须拒绝
+    if not videos.is_dir():  # 尚未抓取任何视频属于正常空缓存
+        return []  # 不创建缓存目录
+    folders = sorted(path for path in videos.iterdir() if path.is_dir())  # 仅遍历videos的直接视频子目录
+    for folder in folders:  # 收集前检查每个目录防止进入外部缓存
+        within(folder, boundary)  # 子目录链接不能逃逸实际videos边界
+    protected = {(folder / "metadata.json").resolve() for folder in folders}  # 元数据即使链接到媒体扩展名也必须保护
+    if (root / COURSE_FILE).is_file():  # 清理也可用于尚未建立清单的空课程目录
+        course = load_course(root)  # 读取已记录的笔记位置防止扩展名异常的产物被删除
+        protected.update((root / item[key]).resolve() for item in course.get("history", []) + course["items"] for key in ("note", "planned_note") if item.get(key))  # 正式笔记和中断草稿同样受保护
+    candidates = {}  # 同一候选路径仅计算一次
+    for folder in folders:  # 对每个视频目录复用原有收集器
+        for path in clean_media.collect(folder):  # 不改动clean_media的单视频行为
+            path = Path(path)  # 兼容收集器返回的路径对象
+            resolved = within(path, boundary)  # 所有候选先做逃逸校验再判断媒体类型
+            suffix = path.suffix.lower()  # 大小写扩展名采用相同判据
+            protected_suffixes = {".txt", ".json", ".done", ".md", ".markdown", ".srt", ".vtt", ".ass", ".lrc"}  # 正式文本笔记元数据及完成标记始终保护
+            parts = path.name.lower().split(".")[1:]  # 临时产物链中任一明确文本类型都不清理
+            artifact = any("." + part in protected_suffixes for part in parts)  # 同时保护txt.part及txt.done.part等产物
+            temporary = suffix == ".part" and not artifact  # 保持原收集器任意分片临时名称规则
+            if resolved not in protected and not artifact and (suffix in MEDIA_SUFFIXES or temporary):  # 元数据不能将明确产物伪装成缓存候选
+                candidates.setdefault(resolved, (path, path.stat().st_size))  # 同一实际路径的点点或链接别名只统计并删除一次
+    return sorted(candidates.values())  # 完整候选及大小全部确定后才允许删除
+
+
+def clean(root, apply=False):  # 默认只统计缓存显式apply才删除
+    try:  # 文件系统错误统一转换为可读恢复提示
+        candidates = _cache_candidates(root)  # 删除前完成整个批次的路径及产物保护预检
+        total = sum(size for path, size in candidates)  # 与完成回执共享同一份字节统计
+        deleted, freed = 0, 0  # 干跑始终保持零删除
+        if apply:  # 只有调用方显式选择才执行逐项删除
+            for path, size in candidates:  # 预检已覆盖所有候选避免越界引发部分删除
+                path.unlink()  # 删除候选文件而不递归删除目录
+                deleted += 1  # 仅成功删除后计数
+                freed += size  # 返回实际成功释放的媒体字节数
+    except OSError as exc:  # 直接业务调用也不泄漏原始文件异常
+        raise HintError(f"无法清理课程缓存：{exc}", "缓存清理未完成", "检查 videos 目录权限后重新运行 clean") from None  # 保持项目三段式失败提示
+    return {"mode": "apply" if apply else "dry-run", "files": len(candidates), "paths": [str(path) for path, size in candidates], "bytes": total, "deleted": deleted, "freed_bytes": freed}  # 干跑保留数量并返回完整候选清单
+
+
+def _finished_receipt(root, course):  # 无待处理条目时写索引并汇总完成情况
+    chosen = selected_items(course)  # 完成回执不包含范围外历史结果
+    done = sum(item["status"] == "done" for item in chosen)  # 精确统计本轮成功
+    failed = [item for item in chosen if item["status"] == "failed"]  # 保留完整恢复字段构造文案
+    index_file = write_index(root, course).resolve()  # 发出回执前保证索引已落盘
+    notes_dir = (root / "notes").resolve()  # 笔记目录即使尚不存在也使用绝对路径
+    dry_run = clean(root)  # 完成回执直接复用clean的干跑逻辑
+    cache = {key: dry_run[key] for key in ("files", "bytes")}  # 机器字段只包含数量及字节
+    lines = [f"课程《{course.get('title', '')}》本次范围 {len(chosen)} 集，完成 {done} 篇笔记，失败 {len(failed)} 集。", f"课程索引：{index_file}", f"笔记目录：{notes_dir}"]  # 首句明确课程所选规模及完成失败数量
+    if failed:  # 没有失败则不生成补跑段落
+        lines.append("失败集补跑：")  # 用户可以逐集恢复而不重复已完成任务
+        for item in failed:  # 每集都列出原因建议及实际补跑命令
+            lines.append(f"+ 第 {item['index']} 集 {item['title']}：{item.get('reason') or ''}；下一步：{item.get('next_step') or ''}；补跑：{item.get('rerun') or ''}")  # 保留调用方提供的恢复步骤
+    lines.append(f"缓存的视频和音频共 {cache['bytes'] / 1048576:.1f} MB，要清理吗？（清理不影响笔记和转写稿）" if cache["bytes"] else "没有需要清理的缓存。")  # 明确只询问媒体缓存且不影响正式产物
+    return {"status": "finished", "done": done, "failed": len(failed), "failed_items": [item["index"] for item in failed], "index_file": str(index_file), "notes_dir": str(notes_dir), "cache": cache, "receipt_text": "\n".join(lines)}  # 扩展原结束回执并保持已有结果字段
+
+
 def status(root):  # 只读查询当前范围的进度
     course = load_course(root)  # 不创建目录或重写清单
     items = selected_items(course)  # 状态统计只包含独立选择范围
     counts = {state: sum(item["status"] == state for item in items) for state in sorted(ITEM_STATES)}  # 所有状态始终提供明确计数
     counts["total"] = len(items)  # 提供所选总集数
-    return {"course": True, "root": str(Path(root)), "source_url": course["source_url"], "kind": course["kind"], "title": course.get("title", ""), "scope": copy.deepcopy(course["scope"]), "counts": counts, "failed_items": [copy.deepcopy(item) for item in items if item["status"] == "failed"], "items": copy.deepcopy(items), "remaining_seconds": remaining_seconds(course)}  # 返回完整的只读进度回执
+    return {"course": True, "root": str(Path(root)), "index_file": str((Path(root) / INDEX_FILE).resolve()), "source_url": course["source_url"], "kind": course["kind"], "title": course.get("title", ""), "scope": copy.deepcopy(course["scope"]), "counts": counts, "failed_items": [copy.deepcopy(item) for item in items if item["status"] == "failed"], "items": copy.deepcopy(items), "remaining_seconds": remaining_seconds(course)}  # 返回完整的只读进度回执及绝对索引位置
 
 
 def script_argv(name, *args):  # 为 Agent 提供不经 shell 解析的参数数组
@@ -457,6 +582,7 @@ def verify(root):  # 显式重检选定范围的已完成笔记
     course = load_course(root)  # 读取最新清单并验证可选门禁字段
     checked = sum(item["status"] == "done" for item in selected_items(course))  # 统计重检前原完成数量
     reopened = recheck(root, course)  # 与next使用同一恢复和持久化逻辑
+    write_index(root, course)  # 重检恢复或缓存更新后始终刷新课程索引
     return {"checked": checked, "passed": checked - len(reopened), "reopened": reopened}  # 重开项从通过数量中扣除
 
 
@@ -472,7 +598,7 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
         item = next((entry for entry in chosen if entry["status"] == "pending"), None)  # 按课程序号取下一集
     counts = {state: sum(entry["status"] == state for entry in chosen) for state in ("done", "failed")}  # 仅统计范围内结果
     if item is None:  # 失败集不会自动重试造成无限循环
-        return {"status": "finished", **counts, "failed_items": [entry["index"] for entry in chosen if entry["status"] == "failed"], "reopened": reopened}  # 结束回执也明确本次恢复列表
+        return {**_finished_receipt(root, course), "reopened": reopened}  # 写索引和回执并保留门禁恢复列表
     if item["status"] != "running":  # 首次交出时才设置开始时间
         item.update(status="running", started_at=now())  # 重复 next 不覆盖计时起点
         save_course(root, course)  # 原子保存后再交出命令
@@ -558,6 +684,7 @@ def mark(root, index, state, note=None, reason=None, next_step=None, rerun=None)
             item.update(reason=None, next_step=None, rerun=None)  # 不保留过期补跑提示
     item["status"] = state  # 校验结束后才改变状态
     save_course(root, course)  # 只用原子写更新清单
+    write_index(root, course)  # 成功失败及放回待办每次都刷新课程索引
     chosen = selected_items(course)  # 进度独立计算当前选定范围
     done = sum(entry["status"] == "done" for entry in chosen)  # 范围外历史结果不计入本次进度
     failed = sum(entry["status"] == "failed" for entry in chosen)  # 只统计本轮失败
@@ -587,7 +714,7 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
             stream.reconfigure(encoding="utf-8", errors="replace")  # 保证中文 JSON 和提示可打印
         except (AttributeError, OSError, ValueError):  # 内存流无需重新配置
             pass  # 保持原有可写流
-    parser = _Parser(description="B站课程计划：规划、确认范围和查看状态")  # 当前阶段只公开三个命令
+    parser = _Parser(description="B站课程：规划、执行、索引和媒体缓存清理")  # 完整列出当前开放的课程操作
     commands = parser.add_subparsers(dest="command", required=True)  # 必须选择一个命令
     plan_parser = commands.add_parser("plan", help="建立或刷新课程计划")  # 定义计划子命令
     plan_parser.add_argument("source_url", metavar="URL")  # 接受视频链接或 BV 号
@@ -618,11 +745,16 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
     mark_parser.add_argument("--reason")  # 单集失败原因
     mark_parser.add_argument("--next-step")  # 面向用户的恢复步骤
     mark_parser.add_argument("--rerun")  # 可选显式补跑命令
+    index_parser = commands.add_parser("index", help="重建课程Markdown索引")  # 主动刷新当前所选条目索引
+    index_parser.add_argument("root", metavar="ROOT")  # 索引来自根目录课程清单
+    clean_parser = commands.add_parser("clean", help="查看或清理课程媒体缓存")  # 默认仅统计不删除
+    clean_parser.add_argument("root", metavar="ROOT")  # 仅处理课程videos下的候选缓存
+    clean_parser.add_argument("--apply", action="store_true")  # 显式开关才实际删除媒体
     try:  # 参数和文件错误统一生成可读提示
         args = parser.parse_args(argv)  # 支持调用者提供参数列表
         options = vars(args).copy()  # 生成业务函数关键字参数
         command = options.pop("command")  # 子命令名称不传入业务函数
-        result = {"plan": plan, "start": start, "status": status, "next": course_next, "mark": mark, "verify": verify}[command](**options)  # 分发新复核命令并保持现有入口
+        result = {"plan": plan, "start": start, "status": status, "next": course_next, "mark": mark, "verify": verify, "index": index, "clean": clean}[command](**options)  # 保留复核并分发索引及清理入口
     except HintError as exc:  # 已经具备三段式信息的错误
         print(json.dumps({"status": "error", **exc.to_dict()}, ensure_ascii=False))  # 即使失败也保留末行机器可读 JSON
         raise  # 交给公共入口包装输出人类提示
