@@ -27,6 +27,7 @@ import re
 import sys
 import unicodedata
 from pathlib import Path
+from datetime import date  # 校验元信息中的真实日历日期
 
 IMG_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 IMG_BARE_RE = re.compile(r"(?<!\()\bimages/[\w./-]+\.(?:png|jpe?g|gif)\b")
@@ -195,6 +196,139 @@ def parse_frontmatter(text: str) -> dict:
         if km:
             fm[km.group(1)] = km.group(2).strip().strip('"').strip("'")
     return fm
+
+
+def parse_frontmatter_obsidian(text: str) -> tuple[dict, list[dict], int]:  # 仅解析标量和两空格块列表并返回结束行号
+    lines = text.splitlines()  # 保留原文件坐标
+    fm, errors = {}, []  # 独立于旧版解析器
+    def fail(message, line):  # 统一元信息语法错误格式
+        errors.append({"check": "V4O-FM", "message": message, "line": line})  # 使用新变体编号
+    if not lines or lines[0] != "---":  # 起始标记必须位于文件开头
+        fail("v4-obsidian 必须以 frontmatter 开头", 1)  # 不把普通正文当元信息
+        return fm, errors, 0  # 无可剥离的元信息
+    end = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)  # 精确定位结束分隔线
+    if end is None:  # 未闭合时不消费正文
+        fail("frontmatter 缺少结束分隔线 ---", 1)  # 给出可修复语法错误
+        return fm, errors, 0  # 保持正文错误可见
+    def scalar(raw, line):  # 仅接受字符串标量及明确引用形式
+        value = raw.rstrip()  # 允许无意义尾部空白
+        if value.startswith('"'):  # 双引号采用标准 JSON 转义
+            try:  # 捕获不闭合及无效转义
+                parsed = json.loads(value)  # 不使用通用 YAML 解析器
+                if isinstance(parsed, str):  # 引用值必须仍是字符串
+                    return parsed  # 返回解码结果
+            except ValueError:  # 非法 JSON 字符串
+                pass  # 下方统一报错
+            fail("双引号标量必须使用有效 JSON 转义并闭合", line)  # 定位错误引用
+            return ""  # 不把坏值当有效字段
+        if value.startswith("'"):  # 支持简单单引号引用
+            if len(value) >= 2 and value.endswith("'") and "'" not in value[1:-1].replace("''", ""):  # 单引号以成对单引号转义
+                return value[1:-1].replace("''", "'")  # 解码单引号标量
+            fail("单引号标量必须闭合", line)  # 拒绝残缺字符串
+            return ""  # 后续必需字段校验仍能发现空值
+        if value[:1].isspace() or any(char in value for char in ":#[{"):  # 特殊字符及前导空格必须引用
+            fail("含冒号、#、[、{ 或前导空格的标量必须引用", line)  # 不静默截断值
+        return value  # 普通标量保持文本语义
+    active = None  # 当前允许接列表项的字段
+    for index in range(1, end):  # 仅扫描元信息内容
+        line, number = lines[index], index + 1  # 文本与一基坐标
+        if not line.strip():  # 空行不生成字段
+            continue  # 保留有限语法的容错
+        if line.startswith("  - ") and active is not None:  # 列表只允许恰好两空格缩进
+            fm[active].append(scalar(line[4:], number))  # 列表元素也使用同一标量规则
+            continue  # 不再作为键解析
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_-]*):(?: (.*))?", line)  # 冒号后最多消费一个格式空格
+        active = None  # 新键或坏行都终止上一列表
+        if not match:  # 拒绝嵌套及任意 YAML 语法
+            fail("仅支持 key: value 标量或 key: 后接两空格 - item 列表", number)  # 明确支持范围
+            continue  # 收集剩余错误
+        key, raw = match.groups()  # 字段名与原始值
+        if key in fm:  # 重复字段含义不明确
+            fail(f"frontmatter 字段 {key} 重复", number)  # 避免静默覆盖
+            continue  # 保留首次声明
+        if raw in (None, ""):  # 空值表示块列表
+            fm[key], active = [], key  # 等待后续列表项
+        else:  # 非空标量
+            fm[key] = scalar(raw, number)  # 引用与未引用规则统一
+    return fm, errors, end + 1  # 返回可直接切片剥离的结束行数
+
+
+def _obsidian_shift_report(report: dict, offset: int) -> None:  # 将正文报告的所有坐标映射回原文件
+    def message(value):  # 转换消息中嵌入的中文行号
+        return re.sub(r"第(\d+)行", lambda match: f"第{int(match.group(1)) + offset}行", value)  # 数字只转换明确行号
+    for item in report["errors"] + report["warnings"]:  # 错误与警告都需偏移
+        if item.get("line") is not None:  # 无具体行号的消息保持空值
+            item["line"] += offset  # 转换一基坐标
+        item["message"] = message(item["message"])  # 嵌入文字与字段一致
+    def shift(value, key=""):  # 递归检查明细中的坐标容器
+        if isinstance(value, dict):  # 保留普通计数与业务字段
+            return {name: shift(child, name) for name, child in value.items()}  # 按字段语义分派
+        if key in ("lines", "nav_markers", "source_with_timestamp") and isinstance(value, list):  # 现有明确行号列表
+            return [number + offset for number in value]  # 不转换页码或行数统计
+        if key == "hits" and isinstance(value, list):  # 时间戳命中的首项是坐标
+            return [(row[0] + offset, *row[1:]) for row in value]  # 保留元组结构与时刻
+        if key == "line" and isinstance(value, int):  # 嵌套明细中的单行坐标
+            return value + offset  # 与诊断字段同口径
+        if isinstance(value, list):  # 其他容器递归处理嵌套对象
+            return [shift(child) for child in value]  # 普通数字不会被误偏移
+        return message(value) if isinstance(value, str) else value  # 明细消息也转换嵌入坐标
+    report["checks"] = shift(report["checks"])  # 统一替换坐标转换后的明细
+
+
+def _obsidian_frontmatter_errors(fm: dict, text: str) -> list[dict]:  # 校验变体必需元信息而不扩展通用 YAML 语义
+    errors = []  # 独立错误集合
+    def fail(key, message):  # 尽量定位到字段原始行
+        line = next((i for i, value in enumerate(text.splitlines(), 1) if value.startswith(key + ":")), 1)  # 缺失字段指向开头
+        errors.append({"check": "V4O-FM", "message": message, "line": line})  # 新变体错误
+    for key in ("template_version", "title", "note_type", "platform", "source", "duration", "created", "tags"):  # 公共必需字段
+        if not fm.get(key):  # 空标量及空列表均视为缺失
+            fail(key, f"frontmatter 缺少非空字段 {key}")  # 不隐式回退隐藏坏输入
+    if fm.get("template_version") != "v4-obsidian":  # 显式指定模板也必须正确声明
+        fail("template_version", "template_version 必须是 v4-obsidian")  # 避免声明与执行版本分叉
+    if fm.get("note_type") not in ("lecture", "short"):  # 类型为受限枚举
+        fail("note_type", "note_type 必须是 lecture 或 short")  # 与正文门禁口径一致
+    if not isinstance(fm.get("tags"), list) or not fm["tags"] or not all(isinstance(tag, str) and tag.strip() for tag in fm["tags"]):  # 标签必须是非空字符串列表
+        fail("tags", "tags 必须是非空列表且每项非空")  # 不接受行内数组及标量
+    created = fm.get("created")  # 日期保持原始文本类型
+    try:  # 同时校验固定格式与日历有效性
+        if not isinstance(created, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", created):  # 不接受紧凑日期或空值
+            raise ValueError  # 统一错误入口
+        date.fromisoformat(created)  # 检查闰年与月份天数
+    except ValueError:  # 日期无效
+        fail("created", "created 必须是有效 YYYY-MM-DD 日期")  # 不容忍日期自动纠正
+    platform = fm.get("platform")  # 平台决定来源标识
+    required = ("bvid", "page") if platform == "bilibili" else ("video_id",) if platform == "youtube" else ()  # 其余平台不增加字段
+    for key in required:  # 校验对应平台标识存在
+        if not isinstance(fm.get(key), str) or not fm[key].strip():  # 标识必须是非空标量
+            fail(key, f"platform={platform} 时必须提供 {key}")  # 给出缺失的准确字段
+    return errors  # 语法错误和字段错误由上层合并
+
+
+def _obsidian_toc(report: dict, body: str, offset: int) -> None:  # 新目录只使用与正文完全一致的维基标题
+    lines = body.splitlines()  # 正文坐标先保持相对值
+    state = compute_fence_state(lines)  # 排除围栏中的伪标题
+    headings = [(i, match.group(1)) for i, line in enumerate(lines) if not state[i] and (match := H2_RE.match(line))]  # 仅真实二级标题
+    toc = next((i for i, title in headings if title == "目录"), None)  # 目录位置
+    end = next((i for i, _ in headings if toc is not None and i > toc), len(lines))  # 目录结束
+    titles = {title for _, title in headings if title != "目录"}  # 目标必须精确保留标点编号
+    count, problems = 0, []  # 条目数与诊断
+    for i in range(toc + 1, end) if toc is not None else ():  # 仅扫描目录节
+        if state[i]:  # 代码内目录样例不计入
+            continue  # 不把示例当真实条目
+        line = lines[i]  # 当前目录行
+        if "](#" in line:  # 传统 Markdown 锚点兼容提示
+            report["warnings"].append({"check": "V4O-TOC", "message": "Obsidian 目录请使用 [[#标题]]，替换传统 ](# 锚点", "line": i + 1 + offset})  # 不静默接受传统目录
+        if not re.match(r"^\s*[-+*]\s+", line):  # 非列表说明文字不当目录条目
+            continue  # 只限制目录条目本身
+        match = re.fullmatch(r"\s*[-+*]\s+\[\[#([^\]|]+)\]\]\s*", line)  # 禁止别名及外部锚点
+        if match and match.group(1) in titles:  # 完全对应真实标题
+            count += 1  # 合法条目计数
+        else:  # 格式或目标错误
+            problems.append({"check": "V4O-TOC", "message": "目录条目必须为 [[#标题]] 且与正文 ## 标题完全一致", "line": i + 1 + offset})  # 定位原文件
+    if not count:  # 目录缺失或没有有效维基条目
+        problems.append({"check": "V4O-TOC", "message": "缺少有效 [[#标题]] 目录条目", "line": (toc + 1 if toc is not None else 1) + offset})  # 传统目录可同时报错和提示
+    report["errors"].extend(problems)  # 合并目录错误
+    report["checks"]["obsidian_toc"] = {"passed": not problems, "entries": count}  # 保持结构化明细
 
 
 def compute_fence_state(lines: list[str]) -> list[bool]:
@@ -1212,14 +1346,22 @@ def v4_image_section_problems(lines: list[str], fence_state: list[bool],
     return problems  # 返回
 
 
-def check_note_v4(text: str, note_path: Path, meta_path: Path | None,
-                  txt_dir: Path | None, only_page: int | None = None,
-                  note_type: str | None = None) -> dict:
+def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体复用四版全部正文门禁
+                  txt_dir: Path | None, only_page: int | None = None,  # 保留既有位置参数兼容性
+                  note_type: str | None = None, variant: str | None = None) -> dict:  # 黑曜石通过显式变体进入
     """v4 门禁：语雀直导版式（无 frontmatter / + 列表 / 答案与索引不折叠），内容规则同 v3。
 
     元信息来源：note_type 取参数 > metadata.json 的 suggested_note_type > lecture；
     platform / 视频 ID 取 metadata.json（缺 --meta 时深链只做宽松格式校验）。
     """
+    fm, fm_errors, fm_end = {}, [], 0  # 普通四版不剥离元信息
+    if variant == "obsidian":  # 仅新变体允许元信息
+        original = text  # 保留原文供字段定位
+        fm, fm_errors, fm_end = parse_frontmatter_obsidian(text)  # 使用独立小解析器
+        fm_errors.extend(_obsidian_frontmatter_errors(fm, original))  # 合并必需字段错误
+        text = "\n".join(original.splitlines()[fm_end:]) if fm_end else original  # 仅正文参与四版规则
+        if fm_end and (not text.splitlines() or not V4_MAIN_QUOTE_RE.match(text.splitlines()[0])):  # 结束标记后必须紧接核心主线
+            fm_errors.append({"check": "V4O-FM", "message": "frontmatter 后必须紧接 > 核心主线：引语", "line": fm_end + 1})  # 不把空行吞掉
     errors: list[dict] = []  # error 对象数组
     warnings: list[dict] = []  # warning 对象数组
     checks: dict = {}  # 各检查明细
@@ -1249,6 +1391,15 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,
     platform = (meta_raw.get("platform") or "").strip().lower()  # 平台（可能为空）
     vid = (meta_raw.get("bvid") or meta_raw.get("video_id") or "").strip()  # 视频 ID（可能为空）
     nt = (note_type or meta_raw.get("suggested_note_type") or "lecture").strip().lower()  # 笔记类型
+    if variant == "obsidian":  # 元信息类型优先于参数及抓取建议
+        declared = fm.get("note_type")  # 读取原始声明
+        if isinstance(declared, str) and declared:  # 非空标量才可作为类型
+            for label, value in (("--note-type", note_type), ("metadata", meta_raw.get("suggested_note_type"))):  # 两类来源均检查冲突
+                if value and str(value).strip().lower() != declared.lower():  # 不一致只提示
+                    warn("V4O-FM", f"frontmatter note_type={declared} 与 {label}={value} 冲突，使用 frontmatter")  # 明确优先级
+            nt = declared.lower()  # 正文规则采用元信息类型
+        platform = fm.get("platform") if isinstance(fm.get("platform"), str) else platform  # 元信息提供平台身份
+        vid = next((fm[key] for key in ("bvid", "video_id") if isinstance(fm.get(key), str) and fm[key]), vid)  # 来源标识用于深链校验
 
     # ---- V4-NT：note_type 取值 ----
     if nt not in ("lecture", "short"):  # 非法取值
@@ -1687,8 +1838,16 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,
             warn("V4-RATIO", f"转写稿目录 {txt_dir} 下没有 .txt 文件，跳过字数比对")  # 提示
             checks["length_ratio"] = {"passed": None, "note": "txt 目录为空"}  # 明细
 
-    return {"ok": not errors, "template_version": "v4", "note_type": nt,
-            "errors": errors, "warnings": warnings, "checks": checks}  # 报告
+    report = {"ok": not errors, "template_version": "v4", "note_type": nt,  # 先构造原四版正文报告
+              "errors": errors, "warnings": warnings, "checks": checks}  # 保持原报告结构
+    if variant == "obsidian":  # 元信息错误坐标已是原文件坐标
+        _obsidian_shift_report(report, fm_end)  # 先转换全部正文诊断及明细
+        report["errors"][:0] = fm_errors  # 再插入不需偏移的元信息错误
+        _obsidian_toc(report, text, fm_end)  # 目录直接生成原文件坐标
+        report["checks"]["obsidian_frontmatter"] = {"passed": not fm_errors, "end_line": fm_end}  # 元信息结束位置供诊断
+        report["template_version"] = "v4-obsidian"  # 报告具体模板
+        report["ok"] = not report["errors"]  # 合并后重新计算门禁结论
+    return report  # 普通四版与新变体共享出口
 
 
 def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = None,
@@ -1702,8 +1861,11 @@ def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = Non
     frontmatter template_version=v3 → check_note_v3；其余版本 → VERSION 报错。
     main 与测试共用本函数，保证"测试跑的就是 CLI 跑的"。
     """
-    fm = parse_frontmatter(text)  # 解析 frontmatter（v4 笔记为空）
-    if (template or "").strip().lower() == "v4" or not FRONTMATTER_RE.match(text):  # 显式 v4 或无 frontmatter
+    fm = parse_frontmatter(text)  # 解析旧版声明仅用于路由
+    chosen = (template or "").strip().lower()  # 显式普通四版必须优先保留元信息禁令
+    if chosen != "v4" and (chosen == "v4-obsidian" or fm.get("template_version") == "v4-obsidian"):  # 新变体显式选择或声明自动检测
+        return check_note_v4(text, note_path, meta_path, txt_dir, only_page, note_type=note_type, variant="obsidian")  # 仅在变体内部剥离元信息
+    if chosen == "v4" or not FRONTMATTER_RE.match(text):  # 显式 v4 或无 frontmatter
         return check_note_v4(text, note_path, meta_path, txt_dir, only_page,
                              note_type=note_type)  # 交给 v4 规则集
     version = (fm.get("template_version") or "").strip().lower()  # frontmatter 声明的版本
@@ -1746,9 +1908,9 @@ def main():
     ap.add_argument("--page", type=int, default=None,
                     help="单分P笔记场景：限定时间索引定位到该分P页码"
                          "（每选集一份笔记时必填，与 note_nav --page 同口径）")
-    ap.add_argument("--template", choices=["v4"], default=None,
-                    help="模板版本：v4（语雀直导版式，无 frontmatter）；"
-                         "省略时无 frontmatter 也按 v4 处理")  # 显式指定 v4
+    ap.add_argument("--template", choices=["v4", "v4-obsidian"], default=None,  # 支持显式选择黑曜石变体
+                    help="模板版本：v4（语雀直导版式，无 frontmatter）或 v4-obsidian；"  # 展示可选模板
+                         "省略时按 frontmatter 声明自动识别")  # 普通四版仍默认无元信息
     ap.add_argument("--note-type", choices=["lecture", "short"], default=None,
                     help="仅 v4：笔记类型；省略取 metadata.json 的 suggested_note_type，"
                          "再缺省为 lecture")  # v4 的 note_type 来源

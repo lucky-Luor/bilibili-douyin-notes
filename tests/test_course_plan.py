@@ -7,9 +7,45 @@ from pathlib import Path  # 管理临时课程目录与固定响应
 from types import SimpleNamespace  # 保存离线桩调用记录
 import pytest  # 提供参数化测试与隔离夹具
 import course_plan as cp  # 只通过公开命令行入口检验课程规划
+import doctor  # 将共享配置读取器隔离到临时目录
 
 
 FIXTURES = Path(__file__).parent / "fixtures"  # 固定响应全部来自仓库测试目录
+
+
+@pytest.mark.parametrize("configured,explicit,expected", [(None, None, "v4"), ("v4-obsidian", None, "v4-obsidian"), ("v4-obsidian", "v4", "v4"), ("invalid", "v4", "v4")])  # 参数优先于配置并保持四版默认
+
+def test_start_template_config_priority(tmp_path, offline, capsys, configured, explicit, expected):  # 配置只从临时路径加载
+    plan(capsys, offline, tmp_path)  # 离线建立课程
+    doctor.CONFIG.write_text(json.dumps({"note_template": configured}), encoding="utf-8")  # 用临时配置模拟默认模板
+    args = ["--template", explicit] if explicit else []  # 缺省才读取配置
+    result, _ = invoke(capsys, "start", tmp_path, "--all", *args)  # 真实命令行选择
+    assert read_course(tmp_path)["template"] == expected and result["template"] == expected  # 持久化与回执一致
+    step = next(step for step in cp.course_next(tmp_path)["steps"] if step["kind"] == "note")  # 下游命令沿用课程模板
+    assert step["template"] == expected  # 笔记编写也知道目标模板
+    for argv in (step["nav_argv"], step["validate_argv"]):  # 两个脚本不能分叉模板
+        assert argv[argv.index("--template") + 1] == expected  # 显式透传模板
+
+
+def test_start_template_change_warns_completed(tmp_path, offline, capsys):  # 已完成笔记不能在模板切换时静默失效
+    plan(capsys, offline, tmp_path)  # 构造离线清单
+    data = read_course(tmp_path)  # 模拟一篇既有完成笔记
+    data["items"][0]["status"] = "done"  # 仅状态用于提示计数
+    write_course(tmp_path, data)  # 保留既有完成结果
+    result, output = invoke(capsys, "start", tmp_path, "--all", "--template", "v4-obsidian")  # 切换到新模板
+    assert "1" in output and "next" in output and "复查" in output  # 明确篇数与下一次复查入口
+    assert result["warnings"] and read_course(tmp_path)["items"][0]["status"] == "done"  # 仅提示不提前清空进度
+
+
+@pytest.mark.parametrize("value", ["bad", None, 4])  # 可选字段存在时必须是有效模板
+
+def test_invalid_course_template_rejected(tmp_path, offline, capsys, value):  # 已保存错误模板不能交出下游命令
+    plan(capsys, offline, tmp_path)  # 建立合法课程
+    data = read_course(tmp_path)  # 注入错误顶层字段
+    data["template"] = value  # 区分缺失字段与显式坏值
+    write_course(tmp_path, data)  # 模拟历史损坏清单
+    with pytest.raises(cp.HintError):  # 采用现有可读提示
+        cp.load_course(tmp_path)  # 加载时立即拒绝
 
 
 def read_fixture(name):  # 每次读取独立对象避免跨用例污染
@@ -25,7 +61,8 @@ def write_course(root, course):  # 模拟下游处理器回写进度
 
 
 @pytest.fixture(autouse=True)  # 每个用例都执行强制网络隔离
-def offline(monkeypatch):  # 默认桩覆盖网络与真实登录配置
+def offline(monkeypatch, tmp_path):  # 默认桩覆盖网络与真实登录配置
+    monkeypatch.setattr(doctor, "CONFIG", tmp_path / "isolated-settings.json")  # 配置缺省测试也禁止读取真实配置
     state = SimpleNamespace(views={}, api_calls=[], probes=[], sleeps=[], cookie="", modes={})  # 集中记录外部交互
     def blocked(*args, **kwargs):  # 任何漏网请求立即失败
         raise AssertionError("离线测试禁止真实网络请求")  # 失败应指出隔离问题

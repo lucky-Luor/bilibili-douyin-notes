@@ -41,6 +41,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from validate_note import parse_frontmatter_obsidian  # 复用独立小解析器而非旧版元信息解析器
 
 NAV_BEGIN_RE = re.compile(r"^\s*<!--\s*NAV:BEGIN\b.*?-->\s*$")
 NAV_END_RE = re.compile(r"^\s*<!--\s*NAV:END\b.*?-->\s*$")
@@ -190,16 +191,18 @@ def main_v3(note_path: Path, text: str, txt_dir: Path, platform: str,
     return 0
 
 
-def main_v4(note_path: Path, text: str, txt_dir: Path, platform: str,
-            bvid: str, only_page: int | None = None) -> int:
+def main_v4(note_path: Path, text: str, txt_dir: Path, platform: str,  # 变体沿用同一原位填链路径
+            bvid: str, only_page: int | None = None, mode: str = "v4",  # 模式只影响摘要
+            note_type: str = "lecture") -> int:  # 元信息类型透传
     """v4 模式：为「## 视频时间索引」节内的无链接条目原位填链（无 NAV 标记）。
 
     找不到该节 / 节内无待填条目 → stderr warning、不改文件、退出 0（存在性由门禁管）；
     条目行原位重写（不排序、不增删行），写入沿用 .tmp → os.replace 原子替换。
     """
-    lines = text.splitlines()  # 全文按行
-    head = next((i for i, l in enumerate(lines) if V4_INDEX_HEAD_RE.match(l)), None)  # 索引节标题行
-    summary = {"mode": "v4", "platform": platform, "note_type": "lecture"}  # JSON 摘要公共字段
+    lines = text.splitlines()  # 全文按行，元信息原行原序保留
+    fm_end = parse_frontmatter_obsidian(text)[2] if mode == "v4-obsidian" else 0  # 元信息内的文本不参与节定位
+    head = next((i for i, l in enumerate(lines) if i >= fm_end and V4_INDEX_HEAD_RE.match(l)), None)  # 索引节标题行
+    summary = {"mode": mode, "platform": platform, "note_type": note_type}  # JSON 摘要公共字段
     if head is None:  # 没有时间索引节
         print("warning: v4 笔记未找到「## 视频时间索引」小节，跳过填链"
               "（条目存在性由门禁检查）", file=sys.stderr)  # 提示
@@ -247,8 +250,8 @@ def main(argv=None) -> int:
     ap.add_argument("--page", type=int, default=None,
                     help="单分P笔记场景：限定深链只归属到该分P页码"
                          "（每选集一份笔记时必填，否则早分P同秒时间行抢先命中）")
-    ap.add_argument("--template", choices=["v4"], default=None,
-                    help="模板版本：v4（语雀直导版式）；省略时无 frontmatter 也按 v4 处理")  # 显式指定 v4
+    ap.add_argument("--template", choices=["v4", "v4-obsidian"], default=None,  # 导航支持显式选择新变体
+                    help="模板版本：v4 或 v4-obsidian；省略时按元信息声明识别")  # 无元信息仍按四版
     ap.add_argument("--note-type", choices=["lecture", "short"], default=None,
                     help="仅 v4：笔记类型；省略取 metadata.json 的 suggested_note_type")  # v4 的 note_type 来源
     args = ap.parse_args(argv)
@@ -266,22 +269,30 @@ def main(argv=None) -> int:
         note_type = (nt.group(1) if nt else "").strip().lower()
         tv = TEMPLATE_VERSION_RE.search(fm.group(1))
         template_version = (tv.group(1) if tv else "").strip().lower()
-    is_v4 = args.template == "v4" or fm is None  # 显式 v4 或无 frontmatter → v4
-    if not is_v4 and template_version != "v3":  # frontmatter 写了不支持的版本
+    obsidian = args.template != "v4" and (args.template == "v4-obsidian" or template_version == "v4-obsidian")  # 显式普通四版优先
+    obsidian_fm = {}  # 新变体字段独立解析
+    if obsidian:  # 新变体不使用正则剥引号的字段值
+        obsidian_fm, fm_errors, _ = parse_frontmatter_obsidian(text)  # 元信息原文不会重序列化
+        if fm_errors:  # 坏元信息禁止修改笔记
+            print(json.dumps({"status": "error", "errors": fm_errors}, ensure_ascii=True))  # 返回结构化原因
+            return 1  # 保持原文件
+        note_type = obsidian_fm.get("note_type") or ""  # 优先使用元信息声明
+    is_v4 = obsidian or args.template == "v4" or fm is None  # 新变体沿用四版索引填链
+    if not is_v4 and template_version != "v3":  # 保持旧版未知模板拒绝规则
         err = (f"不支持的模板版本「{template_version or '缺失'}」：v1 / v2 已移除，"
                "仅支持 v4（无 frontmatter）与 v3")  # 报错信息
         print(f"error: {err}", file=sys.stderr)  # stderr 提示
         print(json.dumps({"status": "error", "error": err}, ensure_ascii=True))  # JSON 摘要
         return 1  # 不改文件
-    if is_v4:  # v4 无 frontmatter：note_type 取参数 > metadata 建议值 > lecture
-        note_type = (args.note_type or meta.get("suggested_note_type") or "lecture").lower()  # 笔记类型
+    if is_v4:  # 新变体元信息优先，普通四版采用参数及抓取建议
+        note_type = (note_type if obsidian and note_type else args.note_type or meta.get("suggested_note_type") or "lecture").lower()  # 类型优先级一致
     if note_type == "short":  # short 笔记的时间导航可省，直接跳过
         print(json.dumps({"status": "skipped", "reason": "note_type=short",
                           "written": 0, "skipped": 0}, ensure_ascii=True))
         return 0
 
-    platform = (meta.get("platform") or "bilibili").lower()
-    bvid = meta.get("bvid") or meta.get("video_id") or ""
+    platform = (obsidian_fm.get("platform") or meta.get("platform") or "bilibili").lower()  # 元信息声明平台优先
+    bvid = obsidian_fm.get("bvid") or obsidian_fm.get("video_id") or meta.get("bvid") or meta.get("video_id") or ""  # 使用相同来源身份
     if platform not in NO_LINK_PLATFORMS and not bvid:  # 有深链语义的平台必须有视频 ID
         print(json.dumps({"status": "error",
                           "error": "metadata 缺少 bvid/video_id，无法生成深链"},
@@ -289,7 +300,7 @@ def main(argv=None) -> int:
         return 1
 
     if is_v4:  # v4：时间索引节内条目原位填链
-        return main_v4(note_path, text, txt_dir, platform, bvid, only_page=args.page)  # 交给 v4
+        return main_v4(note_path, text, txt_dir, platform, bvid, only_page=args.page, mode="v4-obsidian" if obsidian else "v4", note_type=note_type)  # 原位填链并保留元信息原文
     return main_v3(note_path, text, txt_dir, platform, bvid, note_type,
                    only_page=args.page)  # v3：NAV 标记内条目按分P归属机械填链
 

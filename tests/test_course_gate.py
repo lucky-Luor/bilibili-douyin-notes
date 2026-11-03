@@ -5,6 +5,7 @@ import course_plan as cp  # 真实课程业务入口
 import validate_note  # 观察进程内门禁参数
 from test_course_execution import course, offline, cache_metadata, read_course, write_course, step_of, make_note  # 复用离线课程及文件夹具
 from test_validate_note_v4 import GOOD  # 复用已有真实合法v4笔记
+from test_validate_obsidian import OBS  # 复用真实合法黑曜石元信息及维基目录
 
 
 def valid_note(root):  # 创建真实门禁可通过的首集笔记
@@ -56,7 +57,7 @@ def test_run_gate_dispatch_arguments_and_error_limit(course, monkeypatch):  # �
     root = course()  # 首页编号和元数据稳定
     note, metadata = valid_note(root)  # 准备有效文件
     current = read_course(root)  # 读取课程模板和目标页
-    current["template"] = "v3"  # 验证模板来自课程
+    current["template"] = "v4-obsidian"  # 验证模板来自课程的新合法枚举
     item = current["items"][0]  # 仅校验此项
     item["note"] = note.relative_to(root).as_posix()  # 设置正式笔记路径
     calls = []  # 保存真实分派参数
@@ -67,11 +68,11 @@ def test_run_gate_dispatch_arguments_and_error_limit(course, monkeypatch):  # �
     gate = cp.run_gate(root, current, item)  # 执行适配
     args, kwargs = calls[0]  # 必须进程内调用唯一入口
     assert args == (note.read_bytes().decode("utf-8"), note)  # 文本和笔记路径直接传入
-    assert kwargs == dict(meta_path=metadata, txt_dir=metadata.parent, only_page=1, template="v3", note_type=None)  # 其它页不能串入校验
+    assert kwargs == dict(meta_path=metadata, txt_dir=metadata.parent, only_page=1, template="v4-obsidian", note_type=None)  # 新变体模板明确传入且其它页不能串入校验
     assert gate["errors"] == 5 and gate["warnings"] == 1 and gate["first_errors"] == ["TEST: 0", "TEST: 1", "TEST: 2"]  # 保留计数并限制首错数量
 
 
-@pytest.mark.parametrize("change", ["missing", "invalid", "valid", "template", "legacy"])  # 覆盖断点的全部直接分支
+@pytest.mark.parametrize("change", ["missing", "invalid", "valid", "template", "template_valid", "legacy"])  # 覆盖模板切换的真实失败与合法元信息路径
 def test_recheck_reopens_or_refreshes_once(course, monkeypatch, change):  # 仅范围内done参与恢复
     root = course(first=1)  # 范围外done不可被处理
     note, _ = valid_note(root)  # 首次真实通过
@@ -81,8 +82,10 @@ def test_recheck_reopens_or_refreshes_once(course, monkeypatch, change):  # 仅�
     current["items"][1].update(status="done", note="不存在.md")  # 范围外不能自动重开
     if change == "legacy":  # I3完成项没有门禁缓存
         current["items"][0].pop("gate")  # 兼容旧清单
-    elif change == "template":  # 内容不变模板改变仍须重检
-        current["template"] = "v3"  # 无frontmatter真实校验器仍接受v4笔记
+    elif change in ("template", "template_valid"):  # 内容不变时切换模板必须重开且转换后可以真实通过
+        current["template"] = "v4-obsidian"  # 新模板要求元信息及维基目录
+        if change == "template_valid":  # 同时准备已经转换的合法笔记
+            note.write_text(OBS.replace("?p=13", "?p=1").replace("page: 13", "page: 1"), encoding="utf-8")  # 保留完整元信息仅调整本集页码
     elif change == "missing":  # 文件不见了
         note.unlink()  # 必须恢复原计划路径
     else:  # 改动内容触发重新门禁
@@ -96,13 +99,40 @@ def test_recheck_reopens_or_refreshes_once(course, monkeypatch, change):  # 仅�
     reopened = cp.recheck(root, current)  # 对同一对象做一次恢复
     assert len(saves) == 1 and current["items"][1]["status"] == "done"  # 更新只保存一次且不处理范围外
     item = read_course(root)["items"][0]  # 查看持久结果
-    if change in ("missing", "invalid"):  # 两类需人工恢复
+    if change in ("missing", "invalid", "template"):  # 文件缺失内容损坏及未转换模板都需要恢复
         assert reopened == [1] and item["status"] == "pending" and item["note"] is None  # 正式完成状态撤销
         assert item["planned_note"] == old_note  # 原笔记路径稳定恢复
         assert item["reason"] == "笔记文件不见了" if change == "missing" else item["reason"].startswith("笔记门禁未通过：")  # 精确原因按方案区分
         assert item["next_step"] == ("重新制作这一集" if change == "missing" else "按门禁报告修改这篇笔记")  # 恢复动作可直接使用
     else:  # 真实校验通过仅刷新缓存
         assert reopened == [] and item["status"] == "done" and item["gate"]["template"] == current.get("template", "v4")  # 通过项不重复制作
+
+
+@pytest.mark.parametrize("converted", [False, True])  # 同时验证未转换笔记重开与已转换笔记保持完成
+
+def test_start_template_switch_next_rechecks_real_note(course, converted):  # 从用户入口贯通模板切换与下一集复查
+    root = course(first=1)  # 选定首集以便准确观察结束或重开
+    note, _ = valid_note(root)  # 保持最新主分支真实合法四版夹具
+    cp.mark(root, 1, "done", note=str(note))  # 真实门禁建立旧模板缓存
+    old_gate = read_course(root)["items"][0]["gate"]  # 保存旧缓存供切换后对比
+    result = cp.start(root, first=1, template="v4-obsidian")  # 用户显式切换课程模板
+    switched = read_course(root)["items"][0]  # start只提示而不提前复查
+    assert result["warnings"] and switched["status"] == "done" and switched["gate"] == old_gate  # 已完成缓存由下一次next处理
+    if converted:  # 模拟用户已经转换为新模板
+        note.write_text(OBS.replace("?p=13", "?p=1").replace("page: 13", "page: 1"), encoding="utf-8")  # 新合法元信息维基目录与深链保持完整
+    result = cp.course_next(root)  # 真实门禁不得被模拟成功
+    current = read_course(root)["items"][0]  # 读取持久化复查结果
+    if converted:  # 合规新模板完成项只刷新缓存
+        assert result["status"] == "finished" and result["reopened"] == [] and current["status"] == "done"  # 不重复交出已转换笔记
+        assert current["gate"]["template"] == "v4-obsidian" and current["gate"]["errors"] == 0  # 新模板缓存可以合法保存及读取
+        assert current["gate"]["sha256"] == hashlib.sha256(note.read_bytes()).hexdigest()  # 刷新缓存仍使用真实字节摘要
+    else:  # 未转换笔记必须重新交给制作步骤
+        step = step_of(result, "note")  # 观察合并后完整交接协议
+        assert result["reopened"] == [1] and current["status"] == "running" and current["note"] is None  # next先撤销完成再开始修改
+        assert step["existing_note"] and step["note_path"] == str(note) and "V4O-FM" in step["reason"]  # 稳定原路径并提供真实失败原因
+        assert step["template"] == "v4-obsidian"  # 新制作步骤知道目标模板
+        for argv in (step["nav_argv"], step["validate_argv"]):  # 两个后处理脚本使用同一新模板
+            assert argv[argv.index("--template") + 1] == "v4-obsidian"  # 避免交接回退旧模板
 
 
 def test_next_reuses_invalid_note_with_reason(course):  # 不合格旧笔记交回修改而非重命名
