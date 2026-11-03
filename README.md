@@ -28,6 +28,7 @@
 ## ✨ 功能特性
 
 - **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）、抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）、YouTube（`youtube.com` / `youtu.be` / Shorts 链接，优先取官方/自动字幕）与小红书（`xiaohongshu.com` / `xhslink.com` 视频笔记分享链接）
+- **整门课**：发一个B站分P或合集链接，先列清单、报预估并确认范围，再逐集出笔记；支持进度回报、单集失败后继续及补跑
 - **字幕优先**：自动抓取B站官方/AI字幕（可选登录），零成本秒出文稿
 - **ASR 兜底**：无字幕时用 faster-whisper 本地语音识别（CPU int8，国内走 hf-mirror 镜像），**不调任何付费 API**
 - **重点截图**：按转写稿时间戳锚点 + PyAV 抽帧，本地画质初筛自动**校验并标记**黑屏/空屏/模糊帧（像素占比法，白底 PPT 不误判），最终由 Agent 视觉复核决定取舍；无硬编码锚点时自动从文稿提取关键词
@@ -183,6 +184,16 @@ CPU 转写慢时可在 config.json 调整：`asr_model`（tiny~large-v3，高阶
 > 把这个 YouTube 视频整理成笔记：https://www.youtube.com/watch?v=xxxx
 >
 > 这个小红书视频做个笔记：<App 里「分享 → 复制链接」得到的整段文本>
+
+整门课先规划，Agent 原样展示确认文案，等你选择后再开工。以下示例只确认前 3 集，`next` 输出本集要执行的步骤：
+
+```bash
+python scripts/course_plan.py plan "<B站链接>" "<课程目录>"
+python scripts/course_plan.py start "<课程目录>" --first 3
+python scripts/course_plan.py next "<课程目录>"
+```
+
+每集写完笔记、填深链并通过门禁后，由 Agent 调用 `mark … done --note …`；失败则 `mark … failed --reason …` 后继续。`status` 查询进度，`mark … pending` 补跑。多分P默认只做当前视频；展开合集用 `--scope season`。超过 200 集或 100 小时的清单只允许选择范围，详见 [SKILL.md](SKILL.md)“整门课模式”。
 
 也可以直接手动调用脚本（详见 [SKILL.md](SKILL.md) 的工作流程章节）：
 
