@@ -7,6 +7,13 @@ body:
       value: |
         欢迎提议！建议先描述你遇到的场景（要解决什么问题），再说方案。
 
+  - type: input
+    id: course
+    attributes:
+      label: 你在学哪门课？（可选，帮助我们优先适配）
+    validations:
+      required: false
+
   - type: textarea
     id: problem
     attributes:

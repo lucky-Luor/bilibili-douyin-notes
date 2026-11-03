@@ -13,7 +13,7 @@ description: 把B站/抖音/YouTube/小红书视频整理成Markdown课堂笔记
 
 - **B站** → `bili_fetch.py`：走官方API，优先字幕，按需下载音频/视频流
 - **抖音** → `douyin_fetch.py`：游客身份（无需登录/SESSDATA），下载视频到本地供语音识别（只用于本地转写，用完可清理），一般无字幕 → 必走第二步ASR（抖音视频短，耗时可忽略）。需要 `pip install gmssl`；`abogus.py` 为 GPLv3 代码（源自 Evil0ctal/Douyin_TikTok_Download_API 经 BiliNote 移植），分发需保留其许可头
-- **YouTube** → `yt_fetch.py`：字幕三级回退（youtube-transcript-api 人工→自动字幕 → yt-dlp json3 字幕 → 无字幕交 ASR），有字幕时不下载任何媒体；需要 `pip install yt-dlp youtube-transcript-api`，并建议安装 [deno](https://deno.com)（yt-dlp 解 YouTube JS 挑战所需）
+- **YouTube** → `yt_fetch.py`：默认优先原语言人工字幕 → 中文人工字幕 → 原语言自动字幕 → 原有兜底（yt-dlp json3 字幕 → 无字幕交 ASR）；显式 `--lang` 覆盖默认语言优先级。有字幕时不下载任何媒体；需要 `pip install yt-dlp youtube-transcript-api`，并建议安装 [deno](https://deno.com)（yt-dlp 解 YouTube JS 挑战所需）
 - **小红书** → `xhs_fetch.py`：免登录、无签名，手机 UA 请求分享页并解析内嵌 `__INITIAL_STATE__`，下载视频到本地（默认 h264 转码流，`--origin` 下载体积大得多的原片）；**只支持视频笔记**，图文笔记脚本直接提示退出；链接必须带 `xsec_token`（让用户从 App「分享 → 复制链接」整段发来）；一般无字幕 → 必走第二步 ASR
 - 四个平台的 metadata.json 字段一致，第二/三步脚本自动兼容：B站分P按 `bvid/cid` 按需下载，抖音分P带 `media_path` 直接用本地视频文件
 
@@ -22,7 +22,7 @@ description: 把B站/抖音/YouTube/小红书视频整理成Markdown课堂笔记
 - 脚本目录：本 skill 安装目录下的 `scripts/`（命令中的 `<skill安装目录>` 占位符请替换为本 skill 实际安装路径）
 - 配置文件：本 skill 安装目录下的 `config.json`（存放 SESSDATA；截图上传语雀用的 OSS 配置写在 `oss` 字段）
 - 参考资产：
-  - `references/note-template.md` —— 课堂笔记模板 v4（语雀直导版式：骨架、要点表达、语法契约、时间戳规范）
+  - `references/note-template.md` —— 课堂笔记模板 v4 / v4-obsidian（语雀 / Obsidian 版式、骨架、语法契约、时间戳规范）
   - `references/asr-glossary.json` —— ASR 术语纠错词表（真实错法→正确写法）
   - `references/anchors.json` —— 截图关键词锚点表（按视频 ID 隔离；仅在不用 `--shots` 清单时兜底）
 
@@ -48,17 +48,25 @@ python "<skill安装目录>/scripts/course_plan.py" plan "<链接>" "<课程目�
 ```
 
 1. 读取 stdout **最后一行 JSON**；`course:false` 表示单P无合集，继续下面的原单视频流程。`course:true` 时，把 `confirm_text` **原样发给用户**，并转述 `hint_optional`；用户没有回复，不能调用 `start` 或开始抓取、转写、写笔记。
-2. 用户选好范围后调用 `start "<课程目录>" --all`、`--first 3` 或 `--range 5-12`；用户选择另一种组织范围时加 `--scope pages|season`。多分P有合集时默认只做当前视频；单P有合集默认展开，也可选择只做当前视频。超过 200 集或 100 小时的清单禁止 `--all`，只能选前若干集或指定范围。
+2. 用户选好范围后调用 `start "<课程目录>" --all`、`--first 3` 或 `--range 5-12`；标题明显为英文原声课且没有“中字 / 中英 / 配音”提示时，启动前先确认是否英文转写（见第一步）。用户选择另一种组织范围时加 `--scope pages|season`。多分P有合集时默认只做当前视频；单P有合集默认展开，也可选择只做当前视频。超过 200 集或 100 小时的清单禁止 `--all`，只能选前若干集或指定范围。模板默认取 `config.note_template`，也可在 `start` 显式选择 `--template v4|v4-obsidian`；ASR 语言用 `--asr-lang zh|en|auto`。例如：
+   ```bash
+   # 语雀版式，中文转写
+   python "<skill安装目录>/scripts/course_plan.py" start "<课程目录>" --first 3 --template v4 --asr-lang zh
+   # Obsidian 版式，英文转写；需要自动检测时将 en 改为 auto
+   python "<skill安装目录>/scripts/course_plan.py" start "<课程目录>" --first 3 --template v4-obsidian --asr-lang en
+   ```
 3. 串行循环 `next "<课程目录>"`。`status:next` 的 `steps` 给出 fetch / transcribe / note 步骤；`skip:true` 不执行。优先按 `argv` 参数数组执行，避免含空格路径或特殊字符经过 shell 二次解释；`cmd` 是展示用命令。
 4. fetch 后重新检查**本集**的 `subtitle_detail` 和正式文本：`cc/ai` 且正式文本存在可跳过转写；其它无字幕状态走单集 ASR。`ai_mismatch` 的存疑文本不可用于笔记。读取转写逐集 JSON，进程退出码非 0 或 JSON `status:error` 都算失败；`nothing_to_do` 时也必须确认目标页及正式文本存在，不能直接视为成功。需要恢复元数据时按三段提示处理。
-5. 每集按第三步的全部规则独立制作 v4 笔记，使用 `note_path`，只读这一集的正式转写稿；不要把前面各集的全文持续留在上下文。截图仅用户明确要求时执行。按 `nav_cmd` 填深链，再按 `validate_cmd` 做最终门禁，确认 errors 为 0；两个命令都带本集 `--page N`。
-6. 成功后 `mark "<课程目录>" <序号> done --note "<笔记路径>"`；一集任何步骤失败，用该步的“原因 / 下一步”调用 `mark "<课程目录>" <序号> failed --reason "<原因>" --next-step "<下一步>"`，**继续下一集，不停下来反复询问用户**。课程批处理不强制扫码登录，可将可选登录建议留给用户；失败集可稍后补跑。
-7. 每次 `mark` 把摘要的 `progress` 原样转告用户。`next` 返回 `status:finished` 时汇报完成数、失败集和补跑方式。`status "<课程目录>"` 可只读查询；`mark "<课程目录>" <序号> pending` 可把失败集放回待处理，再调用 `next`。
-8. 中途被打断时再次 `next` 会重新交出原来的 running 集，已 done 的集在 I3 按清单状态跳过。`plan` 刷新同源同模式清单会保留结果；切换模式用 `start --scope`。不要把转写 `.done` 与课程笔记的 done 状态混为一谈，笔记门禁断点判断、课程索引和正式回执留给后续迭代。
+5. 每集按第三步的全部规则独立制作笔记，模板以 `next` 返回的 `note.template`（`v4` / `v4-obsidian`）为准，使用 `note_path`。`existing_note:true` 时在原文件上修正；除文件缺失外，不要整篇重写。只读这一集的正式转写稿，不要把前面各集的全文持续留在上下文。英文课正文首次出现的术语写作 **中文（Original）**，概念卡用中文卡名并加 `+ 原文：Original`；原本中文课程、或卡名本身是纯外文专名时免加原文行。截图仅用户明确要求时执行。按 `nav_cmd` 填深链，再按 `validate_cmd` 做最终门禁，确认 errors 为 0；两个命令都带本集 `--page N` 和选定模板。
+6. 成功后 `mark "<课程目录>" <序号> done --note "<笔记路径>"`；`mark done` 还会执行进程内门禁，拒绝时按报告修正后重试，不能凭先前校验结果强记 done。一集任何步骤失败（含门禁修正后仍失败），用该步的“原因 / 下一步”调用 `mark "<课程目录>" <序号> failed --reason "<原因>" --next-step "<下一步>"`，**继续下一集，不停下来反复询问用户**。课程批处理不强制扫码登录，可将可选登录建议留给用户；失败集可稍后补跑。
+7. 每次 `mark` 把摘要的 `progress` 原样转告用户。`next` 返回 `status:finished` 时，把 `receipt_text` **原样转述**，保留其中的完成数、失败集、课程索引和补跑信息，不自行编造回执。仅当 `cache.bytes > 0` 时询问是否清理缓存；用户同意后才执行 `python "<skill安装目录>/scripts/course_plan.py" clean "<课程目录>" --apply`，`cache.bytes = 0` 时不询问。
+8. 中途被打断时再次 `next` 会先复查已 done 的集，再交出待处理集（含原来的 running 集）。笔记 SHA 与模板未变化时复用缓存、跳过检查；笔记改坏或缺失时退回 pending，保留 `planned_note` 供原位修复。已有草稿不会自动成为 done。需要手动复查时用 `verify "<课程目录>"`，它与 `next` 共享 SHA 校验缓存，并非强制全量检查；`index "<课程目录>"` 刷新课程索引，`status "<课程目录>"` 只读查询、不触发复查。`mark "<课程目录>" <序号> pending` 可把失败集放回待处理，再调用 `next`。`plan` 刷新同源同模式清单会保留结果；切换模式用 `start --scope`。不要把转写 `.done` 与课程笔记的 done 状态混为一谈。
 
 课程目录中的 `course.json` 是唯一状态来源；`videos/<BV号>/` 复用单视频抓取产物，同 BV 只抓取一次，`notes/` 每集一篇。默认最多探测 60 集字幕、间隔 0.3 秒；`plan --probe-all` 全探，`--no-probe` 跳过，未探测或失败按需要 ASR 保守估算。预估按六核笔记本 CPU，后续剩余时间使用已完成集的有效平均耗时修正。
 
 ### 第一步：抓取元数据 + 字幕（B站 / YouTube）或下载视频（抖音 / 小红书）
+
+B站标题明显指向英文原声课（如 Lecture / MIT / Stanford / CS61A），且没有“中字 / 中英 / 配音”等提示时，先问用户是否按英文转写；确认后再启动转写，课程模式在 `start` 选择 `--asr-lang en`（需要自动检测时用 `auto`）。不要只凭平台或中文字幕推断音频语言。
 
 ```bash
 # B站（也支持 b23.tv 短链）
@@ -87,8 +95,8 @@ python "<skill安装目录>/scripts/xhs_fetch.py" "<分享链接或分享文本>
   - `api_empty` → 接口没返回可用字幕URL（`sessdata_loaded:false` 时常见，AI字幕需要登录）：**主动询问用户「要现在扫码登录B站吗？」，确认后代跑 `python "<skill安装目录>/scripts/bili_fetch.py" --login`（脚本生成二维码 PNG 图片并打印路径，把路径给用户打开扫码即登录，SESSDATA 自动写入 config.json）后重跑一次 fetch**；用户拒绝或重跑后仍是 `api_empty` 才走第二步 ASR 兜底；
   - `error` → 查看摘要里的 error 信息（可能是视频失效/风控），重试一次或直接告知用户。
 - **抖音**：视频已下载到 `<输出目录>/media_p01.mp4`（仅供本地转写，本地已存在则跳过下载），无字幕，直接进入第二步 ASR。
-- **YouTube**：按摘要里分P的 `subtitle_detail` 分流：
-  - `manual` / `auto` / `ytdlp_manual` / `ytdlp_auto` → 已写出 `01_<标题>.txt`（`[mm:ss]` 格式，自动字幕已去滚动重复）+ `.done` 标记，直接进入第三步；`subtitle_lang` 为英文等非中文时，笔记用中文撰写、术语保留原文；
+- **YouTube**：默认按原语言人工字幕 → 中文人工字幕 → 原语言自动字幕 → 原有兜底选择；显式 `--lang` 覆盖默认语言优先级。结合 `audio_lang` / `subtitle_lang` 判断是否为原语言课程及术语表达，不因选到中文字幕就抹去英文原声课的原文术语。按摘要里分P的 `subtitle_detail` 分流：
+  - `manual` / `auto` / `ytdlp_manual` / `ytdlp_auto` → 已写出 `01_<标题>.txt`（`[mm:ss]` 格式，自动字幕已去滚动重复）+ `.done` 标记，直接进入第三步；英文原声或英文字幕课程按第三步的中文正文、双语术语与概念卡规则撰写；
   - `none` → 无可用字幕：加 `--download` 重跑（下载音频到 `media_p01.m4a`），再进入第二步 ASR；
   - `blocked` → YouTube 拒绝了当前 IP：先建议用户配 `--proxy` 或 `--cookies-from-browser` 重跑；仍不行再 `--download` 走 ASR；
   - `error` → 看 stderr 日志，重试一次或告知用户。
@@ -167,14 +175,17 @@ python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-not
 > **使用场景定位（2026-10-21，v4）**：本 skill 解决的是“看完课不用自己做笔记”——
 > 产出的是**课后复习资料**，正文按技术知识体系组织、阅读连贯：**正文零时间戳、
 > 零考试向标签**（要点用 `+` 列表 + 关键术语加粗）；视频时间戳只存在于文末的
-> “视频时间索引”，供回看原片时跳转。版式为**可直接导入语雀**的纯 Markdown：
-> 无 frontmatter、无一级标题、答案与时间索引不折叠。
+> “视频时间索引”，供回看原片时跳转。默认 v4 为**可直接导入语雀**的纯 Markdown：
+> 无 frontmatter、无一级标题、答案与时间索引不折叠。`v4-obsidian` 变体增加 frontmatter，
+> 目录改用精确标题的 Wiki 链接，其它 v4 正文规则不变。
+
+模板默认取 `config.note_template`，用户可显式选择；课程以 `start --template` 保存、`next` 返回的 `note.template` 为准。英文课结合 `audio_lang` / `subtitle_lang` 与用户确认的语言判断，正文首次出现的术语写成 **中文（Original）**，概念卡用中文卡名并加 `+ 原文：Original`；原本中文课程或卡名本身是纯外文专名时免加原文行，详见模板。
 
 1. 读取 metadata.json（分P结构、时长）+ 各分P转写/字幕文本。
 2. **ASR 术语校正（工具化，不是凭感觉）**：先跑
    `python "<skill安装目录>/scripts/apply_glossary.py" "<转写稿.txt>"`（默认 dry-run，按类别分组只出报告不改文件），按报告核对命中项，确认后再加 `--apply` 落盘（自动留 `.bak` 备份，命中词条 hits 自动累加）。词表分两层：仓库层 `references/asr-glossary.json`（编程/美食/游戏/通用大类）+ 用户层（输出目录 `glossary.user.json` 或 `~/.zcode/bdn-glossary.user.json`，同键用户层优先）；候选词命中只报告（标 `[候选]`）永不替换。**维护闭环**：发现词表未覆盖的新错法 → `--add "错法=正确词" --category 编程`（或 `--candidate` 先入候选、`--promote "错法"` 转正）；`--list` 查看全部；`--categories`/`--topic` 控制启用范围。注意：转写阶段已自动把高频术语注入 initial_prompt（见第二步），词表越丰富转写越准。
 3. **长视频分块（写死流程，禁止跳过）**：单分P转写稿超过约 2 万字时——用 `scripts/transcript_chunk.py` 分块（默认 15000 字/块、末尾重叠 2 段，输出 `chunks/` 目录）→ **map**：逐块提炼该块要点清单 → **reduce**：把各块要点按小节层级合并汇总成最终笔记。**reduce 去重**：重叠区会在相邻块产生重复内容，合并时按 `[mm:ss]` 时间戳唯一化——同一时刻的要点/锚点只保留一次，跨块重复的锚点去重后再排进小节（该去重仅作用于分块合并的中间产物；正文按 v4 规则仍然禁时刻）。禁止跳过分块直接全文阅读长转写稿。
-4. 按 `references/note-template.md`（**v4 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `<序号>-<主题>.md`（如 `2.13-业务流程建模.md`；序号取课程选集号，或按用户已有笔记递增如 `01`；主题取视频标题关键词——文件名即语雀文档标题）。生成前必读该模板文件。v4 硬性要求：
+4. 按 `references/note-template.md`（**v4 / v4-obsidian 模板**）生成一份 MD 文件，保存到用户工作目录，命名 `<序号>-<主题>.md`（如 `2.13-业务流程建模.md`；序号取课程选集号，或按用户已有笔记递增如 `01`；主题取视频标题关键词——文件名即语雀文档标题）。生成前必读该模板文件。以下为 v4 硬性要求；`v4-obsidian` 仅将开头换成模板规定的 frontmatter（闭合后紧接核心主线引语块），目录换成 `+ [[#精确正文标题]]`，其它规则相同：
    - **无 frontmatter、无 `#` 一级标题**：文件第一行就是引语块 `> 核心主线：<一句话知识主线>`（行尾两个空格换行），下一行 `> 课程来源：<视频标题>（B站 BVxxx，UP主：xxx，约 N 分钟）`，有代码仓库再加 `> 课程代码：`；笔记类型取 metadata.json 顶层 `suggested_note_type`（技术密度高的短片可改为 lecture，此时第 6、7 步加 `--note-type lecture`）；
    - **目录**：`+ [N. 小节名](#锚点)` 不带时刻，末尾固定列出 本讲知识地图 / 概念卡片 / 自测题（复习用）/ 视频时间索引；
    - **小节**：`## N. 小节名`（禁时刻后缀），**下一行紧接** `**核心思想：** <一句话>`（不空行），每小节 ≥3 行实质内容；要点用 `+ 要点句`、关键术语 `**加粗**`，**禁止三词标签前缀（核心必考/重点掌握/了解即可及任何变体）、禁止行内 `[mm:ss]`**；对比性内容优先用表格；小节之间可用 `---` 分隔；
@@ -189,14 +200,19 @@ python "<skill安装目录>/scripts/bili_transcribe.py" "<工作目录>/bili-not
    （每个选集单独一份笔记时加 `--page <分P号>`）脚本幂等地把「## 视频时间索引」节内的 `+ [mm:ss] 标题` 条目原位填充为 `+ [mm:ss](URL) 标题`（B站生成 `?p=N&t=S` 深链，YouTube 生成 `watch?v=<id>&t=<秒>s` 深链，抖音 / 小红书无深链保持纯文本）；`note_type=short` 跳过本步；找不到时间索引节时 warning 跳过。v3 老笔记（frontmatter 写 v3）按 NAV 标记填链；v1 / v2 已不再支持。模型输出不含 URL，脚本输出不含自由文本，职责不重叠。
 7. **质量门禁**：生成后运行
    `python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --template v4 --meta "<metadata.json>" --txt-dir "<转写稿目录>"`
-   （每个选集单独一份笔记时加 `--page <分P号>`）errors 必须为 0 才交付；warnings 酌情处理（如精简篇幅）。没有 frontmatter 的笔记默认按 v4 检查（`--template v4` 可省略）；v4 下出现 frontmatter / 一级标题、正文时刻、标签残留、`<details>` 折叠或 NAV 标记、时间索引缺失（lecture）、自测数量越界、概念卡「出现」格式非法等均为 error。frontmatter 写 `template_version: v3` 的老笔记按 v3 规则检查；写 v1 / v2 或缺版本号会直接报 `VERSION` 错误（v1 / v2 规则已移除）。报告 JSON 的 `errors` / `warnings` 为**对象数组**（每项含 `check` 检查编号与 `line` 行号）。
+   单视频选择 Obsidian 时，第 6、7 步的模板都显式改为 `--template v4-obsidian`，例如：
+   ```bash
+   python "<skill安装目录>/scripts/note_nav.py" "<笔记.md>" --template v4-obsidian --meta "<metadata.json>" --txt-dir "<转写稿目录>"
+   python "<skill安装目录>/scripts/validate_note.py" "<笔记.md>" --template v4-obsidian --meta "<metadata.json>" --txt-dir "<转写稿目录>"
+   ```
+   （每个选集单独一份笔记时加 `--page <分P号>`）errors 必须为 0 才交付；warnings 酌情处理（如精简篇幅）。没有 frontmatter 的笔记默认按 v4 检查（`--template v4` 可省略）；v4 下出现 frontmatter / 一级标题、正文时刻、标签残留、`<details>` 折叠或 NAV 标记、时间索引缺失（lecture）、自测数量越界、概念卡「出现」格式非法等均为 error。`v4-obsidian` 需按模板提供 frontmatter 与 Wiki 目录，其它 v4 门禁不变。frontmatter 写 `template_version: v3` 的老笔记按 v3 规则检查；写 v1 / v2 或缺版本号会直接报 `VERSION` 错误（v1 / v2 规则已移除）。报告 JSON 的 `errors` / `warnings` 为**对象数组**（每项含 `check` 检查编号与 `line` 行号）。
 8. **截图上传 OSS（仅带截图的笔记）**：语雀导入 Markdown 不会上传本地图片，交付前先预演
    `python "<skill安装目录>/scripts/upload_images.py" "<笔记.md>"`（列出将上传的图片与目标 OSS 链接，不联网不改文件），
    确认后加 `--apply`：按内容哈希命名上传（远端已有则跳过，可重复执行），再把笔记里的 `images/...` 原位改写为 OSS 链接（留 `.bak` 备份）。
    OSS 配置读 `config.json` 的 `oss` 字段或环境变量 `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_PREFIX / OSS_PUBLIC_BASE_URL`
    （也可 `--env-file <xxx.env>`）；Bucket 需公共读或经 CDN 可公开访问。**门禁要在上传前跑**（上传后图片是网络链接，位置与图注校验会跳过）；
    缺配置时脚本只列出缺哪些键，不要向用户索要密钥明文，让用户自己填进 config.json 或环境变量。
-9. **媒体清理（交付后必问用户）**：若输出目录存在缓存媒体（抖音的 `media_p01.mp4` 等本地视频，或残留的 `.part`/`.audio_*`/`.video_*` 临时文件），**询问用户「是否清理缓存的视频/音频文件？重新做笔记会重新下载」**：确认 → 先跑
+9. **媒体清理（单视频交付后按缓存询问；整门课按课程步骤 7 处理）**：若输出目录存在缓存媒体（抖音的 `media_p01.mp4` 等本地视频，或残留的 `.part`/`.audio_*`/`.video_*` 临时文件），**询问用户「是否清理缓存的视频/音频文件？重新做笔记会重新下载」**：确认 → 先跑
    `python "<skill安装目录>/scripts/clean_media.py" "<输出目录>"`
    把将删除的清单给用户过目，再执行 `--apply` 实删；拒绝 → 跳过并说明缓存保留的意义（重跑截图/转写不再联网）。B站的临时音频/视频在流程中已自动删除，通常无残留。
 

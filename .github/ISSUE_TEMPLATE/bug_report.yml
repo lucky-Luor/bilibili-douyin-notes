@@ -7,6 +7,13 @@ body:
       value: |
         感谢反馈！请先搜索是否已有类似 issue。提交前请尽量把「复现步骤」「日志」「平台信息」填全，缺日志的 bug 很难定位。
 
+  - type: input
+    id: course
+    attributes:
+      label: 你在学哪门课？（可选，帮助我们优先适配）
+    validations:
+      required: false
+
   - type: textarea
     id: description
     attributes:
