@@ -176,6 +176,7 @@ def test_no_probe_never_calls_subtitle_service(capsys, offline, tmp_path):  # �
     assert offline.probes == [] and offline.sleeps == []  # 不执行请求与节流
     assert {item["subtitle_hint"] for item in read_course(tmp_path)["items"]} == {"unknown"}  # 未探测不代表无字幕
     assert result["asr_items"] == 4  # 未知字幕按需要语音识别进行保守估算
+    assert read_course(tmp_path)["probe"] == "none" and "未探测" in result["confirm_text"]  # 持久化跳过原因并明确说明
 
 
 def expand_pages(data, count, seconds=60):  # 构造限额和大课程测试所需详情
@@ -189,10 +190,35 @@ def test_probe_limit_and_interval(capsys, offline, tmp_path, all_probes, expecte
     data = install(offline)  # 提供合法的视频身份
     expand_pages(data, 65)  # 课程比默认探测上限略大
     args = ["--probe-all"] if all_probes else []  # 显式全探测应覆盖全部成员
-    invoke(capsys, "plan", data["bvid"], tmp_path, *args)  # 使用真实命令行探测选项
+    result, _ = invoke(capsys, "plan", data["bvid"], tmp_path, *args)  # 使用真实命令行探测选项
+    course = read_course(tmp_path)  # 检查探测模式可跨命令持久化
+    assert course["probe"] == ("all" if all_probes else "default")  # 保存实际执行的探测方式
+    assert ("默认最多探测前 60 集" in result["confirm_text"]) is (not all_probes)  # 全探测不得显示默认截断提示
+    resumed, _ = invoke(capsys, "start", tmp_path, "--first", "1")  # 后续确认继续使用持久探测模式
+    assert ("默认最多探测前 60 集" in resumed["confirm_text"]) is (not all_probes)  # 文案不因重新加载清单改变
     hints = [item["subtitle_hint"] for item in read_course(tmp_path)["items"]]  # 未探测成员应保留未知
     assert len(offline.probes) == expected and hints.count("unknown") == 65 - expected  # 限额不得越界
     assert len(offline.sleeps) == expected - 1 and all(delay == 0.3 for delay in offline.sleeps)  # 连续探测严格间隔三百毫秒
+
+
+@pytest.mark.parametrize("probe", ["invalid", None, 1, [], {}])  # 探测字段可缺省但存在时必须属于合法枚举
+def test_invalid_saved_probe_is_rejected(capsys, offline, tmp_path, probe):  # 损坏探测模式不能进入后续确认
+    plan(capsys, offline, tmp_path, "pages", "--no-probe")  # 先建立完整合法课程
+    course = read_course(tmp_path)  # 注入单独字段错误以隔离校验目标
+    course["probe"] = probe  # 包括错误类型和空值
+    write_course(tmp_path, course)  # 模拟外部写入错误
+    before = (tmp_path / "course.json").read_bytes()  # 校验失败不能修改磁盘
+    assert_failure(capsys, "start", tmp_path, "--first", "1")  # 必须给出可读恢复提示
+    assert (tmp_path / "course.json").read_bytes() == before  # 无效枚举不能被静默修正
+
+
+def test_missing_probe_remains_legacy_compatible(capsys, offline, tmp_path):  # 旧课程没有新增字段仍允许加载
+    plan(capsys, offline, tmp_path, "pages", "--no-probe")  # 建立旧数据模拟基础
+    course = read_course(tmp_path)  # 删除新增可选字段
+    course.pop("probe", None)  # 模拟旧版课程文件
+    write_course(tmp_path, course)  # 持久化真实旧版格式
+    result, _ = invoke(capsys, "start", tmp_path, "--first", "1")  # 后续命令必须兼容
+    assert result["items_in_scope"] == 1  # 缺字段不影响处理范围
 
 
 @pytest.mark.parametrize("cookie,expects_login", [("", True), ("fake-session", False)])  # 未登录与已登录的无字幕提示不同

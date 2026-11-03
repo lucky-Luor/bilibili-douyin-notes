@@ -107,8 +107,12 @@ def test_transcribe_page_error_has_hint_and_rerun(tmp_path, monkeypatch, capsys)
         raise _hints.explain_http(412, "bilibili", "这一集无法下载音频，不能语音识别")  # 三段式异常
     monkeypatch.setattr(bili_transcribe, "download_audio", boom)  # 替换下载
     monkeypatch.setattr(bili_transcribe, "load_sessdata", lambda: "")  # 无登录态
+    monkeypatch.setattr(bili_transcribe, "_cfg", lambda key, default: default)  # 不读取真实模型配置
+    monkeypatch.setattr("apply_glossary.top_terms", lambda **kwargs: [])  # 不读取用户术语文件
     monkeypatch.setattr("sys.argv", ["bili_transcribe.py", str(mp)])  # main 从命令行读参数
-    bili_transcribe.main()  # 运行
+    with pytest.raises(SystemExit) as exc:  # 单集失败最终必须非零退出
+        bili_transcribe.main()  # 保留逐集机器错误回执
+    assert exc.value.code == 1  # 失败回执和退出码保持一致
     last = json.loads(capsys.readouterr().out.strip().splitlines()[-1])  # 最后一行进度
     assert last["status"] == "error" and "风控" in last["reason"]  # 原因说清
     assert last["rerun"].endswith(f'"{mp}" --page 1')  # 只补跑这一集

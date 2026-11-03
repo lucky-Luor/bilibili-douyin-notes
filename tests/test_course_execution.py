@@ -347,16 +347,18 @@ def test_orphan_marker_allows_real_transcribe_entry_to_recover(course, monkeypat
     metadata, _, text = cache_metadata(root)  # 写入匹配的缓存身份
     marker = text.with_name(text.name + ".done")  # 旧完成标记仍在但正文已经缺失
     marker.write_text("{}", encoding="utf-8")  # 模拟孤立完成标记
-    result = cp.course_next(root)  # 编排时修复失效标记
+    result = cp.course_next(root)  # 编排只判断孤立标记不修改证据
+    assert marker.read_text(encoding="utf-8") == "{}"  # 交出步骤时保留原标记不改名
     assert step_of(result, "transcribe")["skip"] is False  # 本集需要真实转写
     monkeypatch.setattr(bt, "load_sessdata", lambda: "")  # 不读真实配置
     monkeypatch.setattr(bt, "_cfg", lambda key, default=None: default)  # 使用默认模型与设备
+    monkeypatch.setattr("apply_glossary.top_terms", lambda **kwargs: [])  # 不读取用户术语文件
     monkeypatch.setattr(bt, "download_audio", lambda bvid, cid, path, cookie: path.write_bytes(b"audio"))  # 音频下载离线替换
     monkeypatch.setattr(bt, "transcribe", lambda *args, **kwargs: "[00:01] 恢复的正式转写稿")  # 不调用模型或网络
     monkeypatch.setattr(sys, "argv", ["bili_transcribe.py", str(metadata), "--page", "1"])  # 使用交出步骤相同参数
     bt.main()  # 运行真实转写入口及完成判据
     assert text.is_file() and "恢复" in text.read_text(encoding="utf-8")  # 不得被孤立标记误判为nothing_to_do
-    assert list(marker.parent.glob(marker.name + ".orphan-*"))  # 原标记保留为可追溯备份
+    assert marker.is_file() and not list(marker.parent.glob(marker.name + ".orphan-*"))  # 成功覆盖正式标记且不生成改名备份
 
 
 def test_cli_next_and_mark_emit_json_and_single_stderr_progress(course, capsys):  # 标准输出仅机器摘要且用户进度保持单行

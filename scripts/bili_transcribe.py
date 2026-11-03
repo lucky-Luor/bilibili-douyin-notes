@@ -26,6 +26,7 @@ import sys
 import time
 from pathlib import Path
 
+import bili_fetch  # 复用元数据原子写入工具
 import _net  # 公共 HTTP 请求（4xx 不重试、失败给三段式提示）
 from _hints import HintError, explain_bili_code, failure_record, run_cli  # 三段式提示
 
@@ -204,7 +205,7 @@ def load_model(model_size: str, device: str = "auto") -> dict:
 
 def transcribe(audio_path: Path, model_size: str, lang: str | None,
                device: str = "auto", backend: str = "faster-whisper",
-               terms: list[str] | None = None) -> str:
+               terms: list[str] | None = None, result: dict | None = None) -> str:  # 可选出参逐集返回实际语言并保持字符串兼容
     if backend != "faster-whisper":
         raise NotImplementedError(
             f"暂不支持的 ASR 后端: {backend}（当前仅实现 faster-whisper）")
@@ -223,6 +224,8 @@ def transcribe(audio_path: Path, model_size: str, lang: str | None,
                                                    vad_filter=True)
     lines = [f"[{int(s.start) // 60:02d}:{int(s.start) % 60:02d}] {s.text.strip()}"
              for s in segments if s.text.strip()]
+    if result is not None:  # 检测结果只属于本次调用不进入共享模型状态
+        result["asr_lang"] = lang or info.language  # 自动模式使用实际模型信息中的检测语言
     return "\n".join(lines)
 
 
@@ -239,12 +242,10 @@ def mark_done(txt_path: Path):
 
 
 def txt_done(outdir: Path, page: dict) -> bool:
-    """转写完成判据（M6）：标记文件 <txt路径>.done 存在即视为完成。
-
-    兼容旧产物：无标记但 txt >= 100 字节视为有效（100 字节阈值逻辑只留在
-    此兼容分支），并自动补写标记；更小的 txt 视为上次中断的残片，需重转。
-    """
+    """正式 txt 存在且有完成标记，或旧文本至少一百字节时视为完成并补标记。"""  # 统一正文和标记的完成判据
     f = outdir / f"{page['page']:02d}_{safe_name(page['part'])}.txt"
+    if not f.is_file():  # 孤立标记不能代替正式正文且保持原位不修改
+        return False  # 缺少正式文本必须重新转写
     if f.with_name(f.name + ".done").exists():
         return True
     if f.exists() and f.stat().st_size >= 100:  # 旧产物兼容分支：补写标记
@@ -257,10 +258,11 @@ def txt_done(outdir: Path, page: dict) -> bool:
 
 
 def main():
-    try:  # Agent 经管道调用时 stdout 可能是 gbk，emoji 标题会炸在最后一行 print
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    for stream in (sys.stdout, sys.stderr):  # 管道调用时双流统一使用中文兼容编码
+        try:  # 兼容测试流和不支持重新配置的宿主
+            stream.reconfigure(encoding="utf-8", errors="replace")  # 保证机器回执和中文错误均可打印
+        except (AttributeError, OSError, ValueError):  # 内存流或关闭的流可能不支持配置
+            pass  # 保留原有流继续处理
     ap = argparse.ArgumentParser()
     ap.add_argument("meta", help="bili_fetch.py 生成的 metadata.json 路径")
     ap.add_argument("--page", type=int, default=0, help="只处理第N个分P（1开始），默认处理所有")
@@ -295,18 +297,26 @@ def main():
         print(json.dumps({"status": "nothing_to_do"}, ensure_ascii=True))
         return
 
+    failed = False  # 累积单集异常并在所有目标处理后统一退出
     for p in targets:
         out_file = outdir / f"{p['page']:02d}_{safe_name(p['part'])}.txt"
         audio = outdir / f".audio_{p['page']:02d}.m4s"
         try:
+            started = time.monotonic()  # 从本集下载或本地媒体处理之前开始计时
             if p.get("media_path"):  # 抖音等平台：视频已在本地
                 audio = outdir / p["media_path"]
             else:
                 download_audio(meta["bvid"], p["cid"], audio, cookie)
-            text = transcribe(audio, model_size, lang, device_pref, terms=terms)
+            result = {}  # 每集独立接收语言避免污染跨页模型缓存
+            text = transcribe(audio, model_size, lang, device_pref, terms=terms, result=result)  # 保持文本返回兼容并接收实际语言
             state = _MODEL_STATE  # load_model 已在 transcribe 内缓存
             atomic_write_text(out_file, text)
+            updated_page = {**p, "asr_lang": result.get("asr_lang", lang)}  # 先构造目标页副本隔离失败写入
+            updated_meta = {**meta, "pages": [updated_page if page is p else page for page in meta["pages"]]}  # 其它页保持原值只替换当前页
+            bili_fetch.atomic_write_text(meta_path, json.dumps(updated_meta, ensure_ascii=False, indent=2))  # 使用公共原子工具更新元数据
+            p.update(asr_lang=updated_page["asr_lang"])  # 仅持久化成功后同步内存以供后续分集保存
             mark_done(out_file)  # M6：写 <txt>.done 完成标记
+            elapsed = round(time.monotonic() - started, 1)  # 包含下载至完成标记落盘的完整耗时
             if state.get("fallback_reasons"):
                 for reason in state["fallback_reasons"]:
                     print(f"警告: {reason}", file=sys.stderr)  # 落级可审计，不静默
@@ -317,8 +327,10 @@ def main():
                               "batched": state.get("batched"),
                               "terms_injected": bool(terms),
                               "fallback_reasons": state.get("fallback_reasons", []),
+                              "elapsed_seconds": elapsed,  # 成功回执提供一位小数的实测秒数
                               "status": "ok"}, ensure_ascii=True), flush=True)
         except Exception as e:
+            failed = True  # 记录失败但继续后续分集
             rec = failure_record(e, "这一集没有转写稿，笔记会缺这一集",  # 结构化的原因 / 影响 / 下一步
                                  f'python "{Path(__file__).resolve()}" "{args.meta}" --page {p["page"]}')  # 只补跑这一集
             print(json.dumps({"page": p["page"], "part": p["part"],
@@ -327,6 +339,8 @@ def main():
         finally:
             if str(audio) == str(outdir / f".audio_{p['page']:02d}.m4s"):
                 audio.unlink(missing_ok=True)  # 仅清理临时下载的音频，保留平台视频缓存
+    if failed:  # 所有分集处理完再向调用方报告整体失败
+        sys.exit(1)  # 保留逐集回执并返回非零退出码
 
 
 if __name__ == "__main__":

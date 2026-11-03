@@ -56,6 +56,8 @@ def _validate_course(course):  # 校验读取到的清单结构
         raise _error("课程清单格式或版本无效")  # 避免错误覆盖不兼容文件
     if course.get("kind") not in ("pages", "season") or not isinstance(course.get("source_url"), str):  # 校验课程来源和类别
         raise _error("课程清单缺少有效来源或类别")  # 返回结构错误提示
+    if "probe" in course and course["probe"] not in ("default", "all", "none"):  # 兼容缺字段旧清单并校验新增探测枚举
+        raise _error("课程字幕探测模式必须是 default、all 或 none")  # 拒绝未知模式避免误导报告
     items = course.get("items")  # 获取全部课程条目
     if not isinstance(items, list) or not items:  # 已保存课程必须至少有一集
         raise _error("课程清单没有有效条目")  # 拒绝损坏的空清单
@@ -251,7 +253,9 @@ def _report(course, root):  # 构造机器回执和可直接转述的确认文�
     if full["oversize"]:  # 超限确认不提供全部做选项
         options = "超过单次处理上限，要怎么做？\n1. 先做前 3 集看效果\n2. 指定范围（例如 2-5）"  # 仅提供小范围选项
     text = f"这是一门{'分P' if course['kind'] == 'pages' else '合集'}课程《{course.get('title', '')}》：共 {full['items']} 集、约 {full['hours']:.1f} 小时，{full['asr_items']} 集需要语音识别，预计{_duration_text(current['total_seconds'])}（按 6 核笔记本 CPU 估算，先做第 1 集后按实际用时修正）。\n{options}"  # 规模和时间依据完整说明
-    if full["items"] > PROBE_LIMIT:  # 只在超过默认探测上限时说明保守预估
+    if course.get("probe", "default") == "none":  # 完全跳过探测时明确解释保守估算
+        text += "\n本次未探测字幕，全部按需要语音识别预估"  # 未探测不等于确认没有字幕
+    elif course.get("probe", "default") == "default" and full["items"] > PROBE_LIMIT:  # 仅默认模式且超限才提示前六十集
         text += f"\n默认最多探测前 {PROBE_LIMIT} 集；其余集数按需要语音识别预估，可用 --probe-all 全部探测。"  # 探测失败或跳过均不会承诺有字幕
     if course["kind"] == "season":  # 合集单P入口应提供另一种范围
         text += "\n也可以只做这一个视频（--scope pages）。"  # 不强制展开合集
@@ -288,6 +292,7 @@ def plan(source_url, root, scope=None, probe_all=False, no_probe=False):  # 建�
         course.pop("season_alt", None)  # 单P合集不提供该字段
     for item in items:  # 新一轮探测不继承旧字幕判断
         item["subtitle_hint"] = "unknown"  # 未探测及关闭探测时全部保持未知
+    course["probe"] = "none" if no_probe else "all" if probe_all else "default"  # 持久化本轮实际使用的探测模式
     if not no_probe:  # 显式关闭时不调用字幕接口
         _probe(items, cookie, probe_all)  # 默认仅前六十集其余保留未知
     course["estimate"] = estimate(selected_items(course))  # 探测后按当前范围重新估算转写开销
@@ -399,10 +404,6 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
             if meta.get("bvid") != item["bvid"] or page is None:  # 阻止过期或错配元数据
                 raise ValueError("BV号或目标分P与课程清单不一致")  # 由三段提示报告原因
             text = folder / f'{page["page"]:02d}_{bili_fetch.safe_name(page["part"])}.txt'  # 只使用目标正式字幕文件
-            if not text.exists():  # 原转写工具仅凭标记存在就会跳过，先隔离失效标记
-                marker = text.with_name(text.name + ".done")  # 只检查本集对应的完成标记
-                if marker.is_file():  # 不删除用户文件，保留异常状态的证据
-                    marker.rename(marker.with_name(marker.name + f".orphan-{time.time_ns()}"))  # 改为不被转写工具识别的唯一备份名称
             if text.is_file():  # 孤立完成标记不能让文本缺失的集被跳过
                 from bili_transcribe import txt_done  # 不加载 faster-whisper 等重型依赖
                 completed = page.get("subtitle_detail") in ("cc", "ai") or txt_done(folder, page)  # 兼容旧转写稿并复用原判据
