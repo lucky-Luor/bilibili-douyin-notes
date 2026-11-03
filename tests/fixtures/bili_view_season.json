@@ -1,0 +1,98 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "bvid": "BV1AXs4zFEem",
+    "aid": 200001,
+    "title": "合集第一讲",
+    "owner": {"mid": 1000, "name": "测试UP主"},
+    "duration": 1500,
+    "videos": 3,
+    "cid": 2000011,
+    "pages": [
+      {"cid": 2000011, "page": 1, "from": "vupload", "part": "1.1", "duration": 600},
+      {"cid": 2000012, "page": 2, "from": "vupload", "part": "1.2", "duration": 500},
+      {"cid": 2000013, "page": 3, "from": "vupload", "part": "1.3", "duration": 400}
+    ],
+    "season_id": 2000,
+    "is_season_display": true,
+    "ugc_season": {
+      "id": 2000,
+      "title": "测试合集",
+      "mid": 1000,
+      "ep_count": 3,
+      "sections": [
+        {
+          "id": 20001,
+          "season_id": 2000,
+          "title": "默认分节",
+          "type": 1,
+          "episodes": [
+            {
+              "id": 200011,
+              "season_id": 2000,
+              "section_id": 20001,
+              "aid": 200001,
+              "bvid": "BV1AXs4zFEem",
+              "cid": 2000011,
+              "title": "合集第一讲",
+              "arc": {
+                "aid": 200001,
+                "title": "合集第一讲",
+                "videos": 3,
+                "duration": 1500,
+                "author": {"mid": 1000, "name": "测试UP主"}
+              },
+              "page": {"cid": 2000011, "page": 1, "from": "vupload", "part": "1.1", "duration": 600},
+              "pages": [
+                {"cid": 2000011, "page": 1, "part": "1.1", "duration": 600},
+                {"cid": 2000012, "page": 2, "part": "1.2", "duration": 500},
+                {"cid": 2000013, "page": 3, "part": "1.3", "duration": 400}
+              ]
+            },
+            {
+              "id": 200012,
+              "season_id": 2000,
+              "section_id": 20001,
+              "aid": 200002,
+              "bvid": "BV1xx411c7mD",
+              "cid": 2000021,
+              "title": "合集第二讲",
+              "arc": {
+                "aid": 200002,
+                "title": "合集第二讲",
+                "videos": 1,
+                "duration": 700,
+                "author": {"mid": 1000, "name": "测试UP主"}
+              },
+              "page": {"cid": 2000021, "page": 1, "from": "vupload", "part": "2.1", "duration": 700},
+              "pages": [{"cid": 2000021, "page": 1, "part": "2.1", "duration": 700}]
+            },
+            {
+              "id": 200013,
+              "season_id": 2000,
+              "section_id": 20001,
+              "aid": 200003,
+              "bvid": "BV17x411N766",
+              "cid": 2000031,
+              "title": "合集第三讲",
+              "arc": {
+                "aid": 200003,
+                "title": "合集第三讲",
+                "videos": 2,
+                "duration": 1100,
+                "author": {"mid": 1000, "name": "测试UP主"}
+              },
+              "page": {"cid": 2000031, "page": 1, "from": "vupload", "part": "3.1", "duration": 600},
+              "pages": [
+                {"cid": 2000031, "page": 1, "part": "3.1", "duration": 600},
+                {"cid": 2000032, "page": 2, "part": "3.2", "duration": 500}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

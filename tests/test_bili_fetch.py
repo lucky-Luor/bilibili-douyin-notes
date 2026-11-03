@@ -222,6 +222,30 @@ def test_probe_reports_suggested_note_type_lecture(monkeypatch, capsys):
     assert out["suggested_note_type"] == "lecture"
 
 
+def test_probe_reports_shared_asr_ratio(monkeypatch, capsys):  # 课程与单视频共用转写预估比例
+    monkeypatch.setattr(bili_fetch, "api", lambda url, cookie="": _view_data(900, (300, 600)))  # 离线详情
+    bili_fetch.probe("BV1xx411c7mD")  # 输出单视频探测摘要
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])  # 解析最后一行
+    assert bili_fetch.ASR_RATIO == 0.2  # 固定为实测基准
+    assert result["estimated_asr_minutes"] == 3.0  # 九百秒乘以零点二再换算分钟
+
+
+def test_subtitle_diagnostics_all_requests_failed(monkeypatch):  # 接口全失败不应误报确实无字幕
+    def fail(*args, **kwargs):  # 阻断真实请求并模拟风控
+        raise RuntimeError("测试风控")  # 模拟不可用的播放器接口
+    monkeypatch.setattr(bili_fetch, "api", fail)  # 所有请求离线替换
+    diagnostics = {}  # 接收可选诊断
+    assert bili_fetch.fetch_subtitles("BV1xx411c7mD", 1, "", rounds=1, diagnostics=diagnostics) == ([], False)  # 保持返回契约
+    assert diagnostics == {"attempted": 2, "succeeded": 0, "failed": 2}  # 两接口均失败
+
+
+def test_subtitle_diagnostics_successful_empty_response(monkeypatch):  # 确认无字幕与探测失败分开
+    monkeypatch.setattr(bili_fetch, "api", lambda *args: {"data": {"subtitle": {"subtitles": []}}})  # 成功但无字幕
+    diagnostics = {}  # 记录本轮接口结果
+    assert bili_fetch.fetch_subtitles("BV1xx411c7mD", 1, "", rounds=1, diagnostics=diagnostics) == ([], False)  # 原返回值兼容
+    assert diagnostics == {"attempted": 2, "succeeded": 2, "failed": 0}  # 确实得到响应
+
+
 # ---------- subtitle_relevant：AI 字幕整体错位交叉校验 ----------
 # 实测案例 BV1GKaG6zEtr：接口返回 ai 状态，内容却是无关电影对白
 

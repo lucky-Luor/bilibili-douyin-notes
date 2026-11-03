@@ -48,6 +48,7 @@ CONFIG = Path(__file__).resolve().parent.parent / "config.json"
 RETRIES = 3  # 与抖音侧一致的失败重试次数
 SUBTITLE_ROUNDS = 5  # 字幕接口轮询轮数：v2 会随机返回错配的 AI 字幕，多轮以拿到 CC 字幕
 SUBTITLE_ROUND_INTERVAL = 1  # 字幕接口轮询间隔（秒）
+ASR_RATIO = 0.2  # 六核笔记本 CPU 使用 small int8 批量转写的时长比例
 
 
 def load_sessdata() -> str:
@@ -241,8 +242,8 @@ def _is_ai_sub(s: dict) -> bool:
     return s.get("ai_type", 0) != 0 or s.get("lan", "").startswith("ai")  # 两种标记任一命中即为 AI
 
 
-def fetch_subtitles(bvid: str, cid: int, cookie: str,
-                    rounds: int = SUBTITLE_ROUNDS) -> tuple[list, bool]:
+def fetch_subtitles(bvid: str, cid: int, cookie: str,  # 保持原有位置参数兼容
+                    rounds: int = SUBTITLE_ROUNDS, diagnostics: dict | None = None) -> tuple[list, bool]:  # 可选探测诊断
     """多轮尝试 player/wbi/v2 与 player/v2，返回 (可用字幕条目, 是否出现过字幕轨)。
 
     实测 /x/player/v2 会**随机**返回三种结果：UP 主上传的 CC 字幕、内容错配的
@@ -260,15 +261,23 @@ def fetch_subtitles(bvid: str, cid: int, cookie: str,
     只要任一接口出现了字幕轨（哪怕无可用 URL），saw_track 即为 True。
     """
     ai_usable: list = []  # 兜底用：轮询中见到的第一批可用 AI 字幕
+    if diagnostics is not None:  # 仅主动要求诊断的调用方接收请求统计
+        diagnostics.update(attempted=0, succeeded=0, failed=0)  # 不改变既有二元组返回值
     saw_track = False  # 是否在任一接口、任一轮见到过字幕轨
     for rnd in range(max(1, rounds)):  # 至少请求一轮
         if rnd:  # 非首轮先等待，避免连续请求触发风控
             time.sleep(SUBTITLE_ROUND_INTERVAL)  # 轮间间隔
         for path in ("x/player/wbi/v2", "x/player/v2"):  # wbi/v2 结果稳定，排在前面
+            if diagnostics is not None:  # 记录本轮接口尝试
+                diagnostics["attempted"] += 1  # 两个播放器接口分别计数
             try:
                 player = api(f"https://api.bilibili.com/{path}?bvid={bvid}&cid={cid}", cookie)  # 请求播放器信息
-            except Exception:
+            except Exception:  # 原有调用仍继续尝试其它接口
+                if diagnostics is not None:  # 区分网络失败与确认无字幕
+                    diagnostics["failed"] += 1  # 失败不作为无字幕依据
                 continue  # 接口异常不置 saw_track，也不算"确认无字幕"
+            if diagnostics is not None:  # 收到成功的业务响应
+                diagnostics["succeeded"] += 1  # 至少一次成功才能确认没有字幕轨
             subs = (player.get("data") or {}).get("subtitle", {}).get("subtitles", []) or []  # 取字幕轨列表
             if subs:  # 出现过字幕轨（不论 URL 是否为空）
                 saw_track = True  # 记录，供 api_empty / none 判定
@@ -311,8 +320,8 @@ def probe(bvid: str):
         "pages": pages,
         "duration": total,
         "suggested_note_type": note_type_for(total, len(pages)),
-        # faster-whisper CPU int8 转写约为音频时长的 2 倍（实测经验值）
-        "estimated_asr_minutes": round(total * 2 / 60, 1),
+        # small int8 批量推理与静音过滤的实测比例，和课程预估共用
+        "estimated_asr_minutes": round(total * ASR_RATIO / 60, 1),  # 仅估算纯转写耗时
     })
 
 
