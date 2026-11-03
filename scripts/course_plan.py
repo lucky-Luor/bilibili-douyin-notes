@@ -365,7 +365,13 @@ def _note_path(root, course, item):  # 默认按讲义编号命名并对重复�
     collisions = [entry for entry in course["items"] if filename(entry).casefold() == name.casefold()]  # Windows 同名比较不区分大小写
     if len(collisions) > 1:  # 合集中不同视频可能拥有相同讲义编号
         name = f'{item["index"]:03d}-{name}'  # 用全局序号避免相互覆盖
-    return root / "notes" / name  # 产物统一放在课程目录中
+    reserved = {(root / entry["note"]).resolve().as_posix().casefold() for entry in course.get("history", []) + course["items"] if entry.get("note") and _key(entry) != _key(item)}  # 同时避让历史清单中其它集的已保存路径
+    candidate = root / "notes" / name  # 先尝试标准候选名称
+    serial = 0  # 文件已存在或被历史记录占用时稳定增加后缀
+    while candidate.resolve().as_posix().casefold() in reserved or candidate.exists():  # 不覆盖未知文件或其它集的已完成笔记
+        serial += 1  # 同时处理多次清洗或重新编号造成的重复
+        candidate = root / "notes" / f'{Path(name).stem}-{item["index"]:03d}-{serial}.md'  # 保留方案要求的前导编号与主题
+    return candidate  # 只有确认没有占用的路径才交给 Agent
 
 
 def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
@@ -393,6 +399,10 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
             if meta.get("bvid") != item["bvid"] or page is None:  # 阻止过期或错配元数据
                 raise ValueError("BV号或目标分P与课程清单不一致")  # 由三段提示报告原因
             text = folder / f'{page["page"]:02d}_{bili_fetch.safe_name(page["part"])}.txt'  # 只使用目标正式字幕文件
+            if not text.exists():  # 原转写工具仅凭标记存在就会跳过，先隔离失效标记
+                marker = text.with_name(text.name + ".done")  # 只检查本集对应的完成标记
+                if marker.is_file():  # 不删除用户文件，保留异常状态的证据
+                    marker.rename(marker.with_name(marker.name + f".orphan-{time.time_ns()}"))  # 改为不被转写工具识别的唯一备份名称
             if text.is_file():  # 孤立完成标记不能让文本缺失的集被跳过
                 from bili_transcribe import txt_done  # 不加载 faster-whisper 等重型依赖
                 completed = page.get("subtitle_detail") in ("cc", "ai") or txt_done(folder, page)  # 兼容旧转写稿并复用原判据
