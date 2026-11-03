@@ -53,6 +53,27 @@ def test_run_gate_missing_inputs(course, missing):  # 缺文件不可被校验�
     assert gate["errors"] == 1 and len(gate["first_errors"]) == 1  # 返回可恢复错误而非异常或假成功
 
 
+def test_run_gate_explicit_language_overrides_metadata(course):  # 真实变体门禁显式语言必须覆盖分集自动回退
+    root = course(first=1)  # 临时目录内只处理首集
+    note, metadata = valid_note(root)  # 使用已有真实文件与转写稿夹具
+    note.write_text(OBS.replace("?p=13", "?p=1").replace("page: 13", "page: 1"), encoding="utf-8")  # 完整有效黑曜石笔记
+    meta = json.loads(metadata.read_text(encoding="utf-8"))  # 仅修改临时元数据
+    meta["pages"][0]["audio_lang"] = "en"  # 缺省时由音频语言触发术语提示
+    metadata.write_text(json.dumps(meta), encoding="utf-8")  # 保存离线输入
+    current = read_course(root)  # 直接构造门禁业务输入
+    current["template"] = "v4-obsidian"  # 保留变体路由
+    item = current["items"][0]  # 当前目标分集
+    item["note"] = note.relative_to(root).as_posix()  # 指向真实笔记
+    fallback = cp.run_gate(root, current, item)  # 空课程语言仍允许元数据回退
+    current["asr_lang"] = "zh"  # 显式中文必须覆盖英语音频
+    gate = cp.run_gate(root, current, item)  # 真实执行分派与术语检查
+    assert gate["errors"] == fallback["errors"] == 0 and fallback["warnings"] == gate["warnings"] + 3  # 忽略夹具原有告警仅比较三条术语差异
+    current["asr_lang"] = "en"  # 显式英语再次触发术语检查
+    assert cp.run_gate(root, current, item)["warnings"] == fallback["warnings"]  # 模板及来源语言同时保留
+    report = validate_note.check_note_dispatch(note.read_text(encoding="utf-8"), note, metadata, metadata.parent, 1, "v4-obsidian", source_lang="en")  # 直接报告独立核对术语检查编号
+    assert len([warning for warning in report["warnings"] if warning["check"] == "V4-TERM"]) == 3  # 原有字数比告警不干扰术语断言
+
+
 def test_run_gate_dispatch_arguments_and_error_limit(course, monkeypatch):  # 参数严格限定当前视频和当前页
     root = course()  # 首页编号和元数据稳定
     note, metadata = valid_note(root)  # 准备有效文件

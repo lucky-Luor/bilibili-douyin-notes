@@ -189,11 +189,13 @@ def pick_lang(available: list[str], langs: list[str]) -> str | None:
     return None  # 都不匹配
 
 
-def fetch_via_transcript_api(video_id: str, langs: list[str], proxy: str | None):
+def fetch_via_transcript_api(video_id: str, langs: list[str] | None, proxy: str | None, result: dict | None = None):  # 尾部可选结果保留三参数调用兼容
     """一级：youtube-transcript-api 拿字幕。返回 (片段, 类型, 语言)；无字幕返回 None。
 
     被封 IP 时抛 RuntimeError("blocked")，交由调用方回退到 yt-dlp。
     """
+    if result is not None:  # 每轮清理本调用负责的字段
+        result.update(audio_lang=None, subtitle_lang=None)  # 不保存模块共享语言状态
     try:  # 库是可选依赖
         from youtube_transcript_api import YouTubeTranscriptApi  # 惰性导入
     except ImportError:  # 未安装
@@ -206,19 +208,34 @@ def fetch_via_transcript_api(video_id: str, langs: list[str], proxy: str | None)
         kwargs["proxy_config"] = GenericProxyConfig(http_url=proxy, https_url=proxy)  # http/https 同一代理
     api = YouTubeTranscriptApi(**kwargs)  # 新版 API 为实例方法
     try:  # 网络与风控异常
-        tlist = api.list(video_id)  # 列出所有字幕轨道
+        tlist = list(api.list(video_id))  # 固化轨道顺序以复用实际选中的轨道对象
         manual = [t.language_code for t in tlist if not t.is_generated]  # 人工字幕语言
         auto = [t.language_code for t in tlist if t.is_generated]  # 自动字幕语言
-        lang = pick_lang(manual, langs)  # 先挑人工字幕
-        kind = "manual"  # 默认类型
+        audio_lang = auto[0] if auto else None  # 第一条自动轨是原音频语言依据
+        if result is not None:  # 独立回传原语言
+            result["audio_lang"] = audio_lang  # 即使没有字幕产出也保留已知音频语言
+        lang, kind = None, "manual"  # 初始化选择结果
+        if langs is None and audio_lang:  # 未显式指定时按原语言策略选择
+            if audio_lang in manual:  # 原语言人工最高优先
+                lang = audio_lang  # 使用精确原语言轨
+            else:  # 原语言人工不存在再找中文人工
+                lang = pick_lang(manual, DEFAULT_LANGS[:5])  # 沿用中文顺序及方言兼容
+            if lang is None:  # 中文人工也不可用
+                lang, kind = audio_lang, "auto"  # 原语言自动优先其它语言
+        priorities = DEFAULT_LANGS if langs is None else langs  # 显式列表保持既有策略
+        if lang is None:  # 原语言不能推断时保留旧策略
+            lang = pick_lang(manual, priorities)  # 先挑人工字幕
         if lang is None:  # 没有匹配的人工字幕
-            lang = pick_lang(auto, langs)  # 再挑自动字幕
+            lang = pick_lang(auto, priorities)  # 再挑自动字幕
             kind = "auto"  # 类型改为自动
-        if lang is None and (manual or auto):  # 优先级里都没有，但有别的语言
-            lang, kind = (manual[0], "manual") if manual else (auto[0], "auto")  # 退而取第一条（原语言）
+        if lang is None and (manual or auto):  # 优先级里都没有但有其它语言
+            lang, kind = (manual[0], "manual") if manual else (auto[0], "auto")  # 保留旧的首条兜底
         if lang is None:  # 完全没有字幕
             return None  # 交给下一级
-        fetched = tlist.find_transcript([lang]).fetch()  # 拉取该语言字幕
+        track = next(t for t in tlist if t.language_code == lang and t.is_generated == (kind == "auto"))  # 同语言人工和自动不能混取
+        fetched = track.fetch()  # 直接抓取选中的实际轨道
+        if result is not None:  # 只在抓取成功后回传字幕语言
+            result["subtitle_lang"] = lang  # 三元组仍是原返回协议
     except Exception as e:  # 风控或其他错误
         if type(e).__name__ in BLOCKED_ERROR_NAMES:  # 被封 IP
             raise RuntimeError("blocked") from e  # 通知调用方
@@ -231,27 +248,50 @@ def fetch_via_transcript_api(video_id: str, langs: list[str], proxy: str | None)
     return segs, kind, lang  # 返回结果
 
 
-def fetch_via_ytdlp(info: dict, langs: list[str], base_opts: dict):
+def fetch_via_ytdlp(info: dict, langs: list[str] | None, base_opts: dict, result: dict | None = None):  # 尾部结果参数不改变既有三元返回
     """二级：从 yt-dlp 元数据的 subtitles / automatic_captions 取 json3 字幕。"""
     import yt_dlp  # 惰性导入
 
-    for field, kind in (("subtitles", "ytdlp_manual"), ("automatic_captions", "ytdlp_auto")):  # 人工优先
-        tracks = info.get(field) or {}  # 语言 -> 格式列表
-        tracks = {k: v for k, v in tracks.items() if k != "live_chat"}  # 排除直播聊天轨道
-        lang = pick_lang(list(tracks), langs)  # 按优先级挑语言
-        if lang is None and field == "subtitles" and tracks:  # 人工字幕存在但不在优先级里
-            lang = next(iter(tracks))  # 取第一条（原语言）
-        if lang is None:  # 该来源无可用语言
-            continue  # 看下一个来源
+    manual = {k: v for k, v in (info.get("subtitles") or {}).items() if k != "live_chat"}  # 排除非字幕聊天轨
+    auto = {k: v for k, v in (info.get("automatic_captions") or {}).items() if k != "live_chat"}  # 保留真实下载键
+    orig = next((key for key in auto if key.endswith("-orig")), None)  # 原始自动字幕键优先于元数据语言
+    audio_lang = orig[:-5] if orig else info.get("language") or None  # 记录规范化原语言
+    if result is not None:  # 每轮覆盖自己负责的字段
+        result.update(audio_lang=audio_lang, subtitle_lang=None)  # 不污染下次调用
+    candidates = []  # 自动策略先尝试原语言及中文人工
+    if langs is None and audio_lang:  # 显式列表不进入新增策略
+        if audio_lang in manual:  # 优先原语言人工
+            candidates.append((manual, "ytdlp_manual", audio_lang))  # 精确选择音频语言
+        chinese = pick_lang(list(manual), DEFAULT_LANGS[:5])  # 中文人工沿用既定优先级
+        if chinese:  # 原语言人工失败时尝试中文人工
+            candidates.append((manual, "ytdlp_manual", chinese))  # 不提前选择其它语言人工
+        auto_key = orig or (audio_lang if audio_lang in auto else None)  # 原始键必须用于抓取
+        if auto_key:  # 原语言自动可用
+            candidates.append((auto, "ytdlp_auto", auto_key))  # 保留后缀直到完成下载
+    priorities = DEFAULT_LANGS if langs is None else langs  # 兜底及显式策略维持旧顺序
+    for tracks, kind in ((manual, "ytdlp_manual"), (auto, "ytdlp_auto")):  # 既有人工优先策略
+        lang = pick_lang(list(tracks), priorities)  # 按原语言列表选择
+        if lang is None and kind == "ytdlp_manual" and tracks:  # 保留旧人工首条兜底
+            lang = next(iter(tracks))  # 不改变显式策略的兜底行为
+        if lang is not None:  # 该来源有匹配项
+            candidates.append((tracks, kind, lang))  # 在新增优先项之后尝试
+    seen = set()  # 同一来源和键只下载一次
+    for tracks, kind, lang in candidates:  # 依序抓取并允许格式或空内容失败后兜底
+        if (kind, lang) in seen:  # 跳过重复候选
+            continue  # 避免重复请求
+        seen.add((kind, lang))  # 记录已尝试轨道
         fmt = next((f for f in tracks[lang] if f.get("ext") == "json3"), None)  # 找 json3 格式
-        if not fmt:  # 没有 json3
-            continue  # 看下一个来源
-        with yt_dlp.YoutubeDL(base_opts) as ydl:  # 复用代理 / cookie
-            raw = ydl.urlopen(fmt["url"]).read().decode("utf-8")  # 下载字幕内容
-        segs = parse_json3(json.loads(raw))  # 解析 json3
-        if segs:  # 有内容才算成功
-            return segs, kind, lang  # 返回结果
-    return None  # 两个来源都没拿到
+        if not fmt:  # 没有可用格式
+            continue  # 尝试下个候选
+        with yt_dlp.YoutubeDL(base_opts) as ydl:  # 复用代理与登录参数
+            raw = ydl.urlopen(fmt["url"]).read().decode("utf-8")  # 用实际键对应地址抓取
+        segs = parse_json3(json.loads(raw))  # 解析字幕
+        if segs:  # 有内容才记录字幕语言
+            subtitle_lang = lang[:-5] if lang.endswith("-orig") else lang  # 页面不记录下载专用后缀
+            if result is not None:  # 可选回传字幕信息
+                result["subtitle_lang"] = subtitle_lang  # 原语言与字幕语言分别存储
+            return segs, kind, subtitle_lang  # 保持原有三元返回结构
+    return None  # 所有候选均不可用
 
 
 def download_audio(video_id: str, outdir: Path, base_opts: dict) -> Path:
@@ -315,7 +355,7 @@ def main(argv=None):
     video_id = extract_video_id(args.source)  # 解析视频 ID
     outdir = Path(args.outdir) if args.outdir else Path(f"yt-notes-{video_id}")  # 输出目录
     outdir.mkdir(parents=True, exist_ok=True)  # 确保目录存在
-    langs = [x.strip() for x in args.lang.split(",") if x.strip()] if args.lang else DEFAULT_LANGS  # 语言列表
+    langs = [x.strip() for x in args.lang.split(",") if x.strip()] if args.lang is not None else None  # 缺省启用原语言策略且显式列表保持原顺序
     proxy = resolve_proxy(args.proxy, load_config())  # 代理
     base_opts = ydl_base_opts(proxy, args.cookies, args.browser)  # yt-dlp 公共参数
 
@@ -337,14 +377,18 @@ def main(argv=None):
 
     log("[2] 获取字幕（transcript-api → yt-dlp）")  # 进度
     detail, sub_lang, segs = "none", None, None  # 默认无字幕
+    language_result = {}  # 当前视频逐层传递语言结果
     try:  # 一级可能报被封
-        got = fetch_via_transcript_api(video_id, langs, proxy)  # 一级
+        got = fetch_via_transcript_api(video_id, langs, proxy, language_result)  # 一级回传原语言
     except RuntimeError:  # 被封 IP
         log("[2] transcript-api 被封 IP，回退 yt-dlp")  # 提示
         got, detail = None, "blocked"  # 标记被封，继续回退
     if got is None:  # 一级没拿到
         try:  # 二级同样可能失败
-            got = fetch_via_ytdlp(info, langs, base_opts)  # 二级
+            fallback_result = {}  # 回退接口结果独立避免清空一级已知语言
+            got = fetch_via_ytdlp(info, langs, base_opts, fallback_result)  # 二级保持三元组协议
+            if not language_result.get("audio_lang"):  # 一级未识别时才采用二级推断
+                language_result["audio_lang"] = fallback_result.get("audio_lang")  # 保留可信的已知原语言
         except Exception as e:  # 网络 / 风控
             log(f"[2] yt-dlp 字幕获取失败: {str(e)[:120]}")  # 记日志
             got, detail = None, detail if detail == "blocked" else "error"  # 保留被封标记
@@ -361,8 +405,8 @@ def main(argv=None):
 
     page = {"page": 1, "part": part, "duration": duration_sec,  # 分P基础信息
             "subtitle": bool(segs), "subtitle_detail": detail}  # 字幕状态
-    if sub_lang:  # 记录字幕语言
-        page["subtitle_lang"] = sub_lang  # 便于笔记判断是否需要翻译
+    page["audio_lang"] = language_result.get("audio_lang")  # 无法推断时显式记录空音频语言
+    page["subtitle_lang"] = sub_lang  # 字幕缺失时为空且不覆盖音频语言
     if not segs and args.download:  # 无字幕且要求下载
         audio = download_audio(video_id, outdir, base_opts)  # 下载音频
         page["media_path"] = audio.name  # 供 bili_transcribe 直接读取本地文件
