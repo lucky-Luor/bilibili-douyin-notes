@@ -42,7 +42,17 @@ def step_of(result, kind):  # 按业务阶段查找结构化步骤
 def make_note(root, relative="notes/中文 空格 笔记.md"):  # 创建可供成功回报使用的真实笔记
     path = Path(root) / relative  # 笔记始终位于课程根目录下
     path.parent.mkdir(parents=True, exist_ok=True)  # 允许使用多级中文目录
-    path.write_text("## 课程笔记\n\n+ 已完成的测试笔记\n", encoding="utf-8")  # 这里只验证回报协议而不重复笔记门禁的职责
+    from test_validate_note_v4 import GOOD  # 复用真实合规内容而不屏蔽门禁
+    content = GOOD.split("4. 为什么 action")[0]  # 短笔记保留前三道自测并省略可选时间索引
+    path.write_text(content, encoding="utf-8")  # 写入真实可通过v4短笔记
+    metadata, meta, _ = cache_metadata(root)  # 成功回报必须拥有对应元数据
+    meta["suggested_note_type"] = "short"  # 通过已有元数据协议选择短笔记规则
+    for page in meta["pages"]:  # 进度标题允许换行但Windows临时文件名不能含控制字符
+        page["part"] = page["part"].replace("\n", " ").replace("\r", " ")  # 保留清单原始多行标题只规范测试字幕文件名
+    metadata.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")  # 各页共用同一真实视频元数据
+    for page in meta["pages"]:  # 多次完成回报可以使用同一无索引短笔记
+        text = metadata.parent / f'{page["page"]:02d}_{cp.bili_fetch.safe_name(page["part"])}.txt'  # 每页独立正式转写稿
+        text.write_text("[00:00] 合法课堂转写内容" * 20, encoding="utf-8")  # 门禁输入全部来自临时测试目录
     return path  # 同时支持绝对路径与相对路径回报
 
 
@@ -141,7 +151,7 @@ def test_next_orders_pending_and_skips_completed(course):  # 完成集不会再�
         assert [step["kind"] for step in result["steps"]] == ["fetch", "transcribe", "note"]  # 交接顺序固定为抓取转写及笔记
         marked = cp.mark(root, index, "done", note=str(note))  # 回报后才允许推进
         assert marked["done"] == index  # 完成数逐集累加
-    assert cp.course_next(root) == {"status": "finished", "done": 4, "failed": 0, "failed_items": []}  # 全部完成后不再交出命令
+    assert cp.course_next(root) == {"status": "finished", "done": 4, "failed": 0, "failed_items": [], "reopened": []}  # 全部完成后不再交出命令
 
 
 def test_failed_item_records_default_pending_rerun_and_continues(course):  # 单集失败不会阻断后续课程
@@ -207,7 +217,7 @@ def test_scope_counts_and_completion_exclude_outside_items(course, selection, ex
         assert result["done"] == position and result["failed"] == 0  # 只计入范围内已回报结果
         marked = cp.mark(root, index, "done", note=str(note))  # 完成一集推进局部进度
         assert marked["progress"].startswith(f"[{position + 1}/2]")  # 进度序号按范围内位置显示
-    assert cp.course_next(root) == {"status": "finished", "done": 2, "failed": 0, "failed_items": []}  # 范围外结果不改变本轮结束摘要
+    assert cp.course_next(root) == {"status": "finished", "done": 2, "failed": 0, "failed_items": [], "reopened": []}  # 范围外结果不改变本轮结束摘要
     assert cp.status(root)["counts"]["total"] == 2  # 只读状态采用相同范围口径
 
 
@@ -410,7 +420,7 @@ def test_finished_and_status_preserve_failures_without_retry(course):  # 本轮�
         else:  # 其余两集正常完成
             cp.mark(root, index, "done", note=str(note))  # 完成数应独立累计
     before = (root / "course.json").read_bytes()  # 结束查询不得重写状态
-    assert cp.course_next(root) == {"status": "finished", "done": 2, "failed": 2, "failed_items": [2, 4]}  # 无待办时用序号列表回报失败项
+    assert cp.course_next(root) == {"status": "finished", "done": 2, "failed": 2, "failed_items": [2, 4], "reopened": []}  # 无待办时用序号列表回报失败项
     status = cp.status(root)  # 状态命令另外提供完整失败记录
     assert status["counts"]["done"] == status["counts"]["failed"] == 2  # 状态摘要与结束回执一致
     assert [item["index"] for item in status["failed_items"]] == [2, 4]  # 失败详情保持课程顺序

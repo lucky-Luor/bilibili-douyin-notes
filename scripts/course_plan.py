@@ -1,5 +1,6 @@
 import argparse  # 解析命令行参数
 import copy  # 复制已有进度以保证校验失败不修改原对象
+import hashlib  # 计算笔记原始UTF8字节摘要
 import json  # 读写课程清单
 import math  # 校验数值并计算剩余耗时
 import re  # 严格解析范围参数
@@ -68,6 +69,12 @@ def _validate_course(course):  # 校验读取到的清单结构
             raise _error(f"第 {index} 集缺少有效标识或状态")  # 明确损坏条目位置
         _positive(item.get("page"), "分P序号")  # 确保分P序号有效
         _number(item.get("duration"), "视频时长")  # 确保耗时计算不会接受非法值
+        if item.get("gate") is not None:  # 旧清单允许缺少或空门禁摘要但非空字段必须完整
+            gate = item["gate"]  # 读取当前条目可选缓存
+            if not isinstance(gate, dict) or any(type(gate.get(key)) is not int or gate[key] < 0 for key in ("errors", "warnings")):  # 拒绝缺失负数和布尔计数
+                raise _error(f"第 {index} 集门禁计数无效")  # 损坏缓存不得直接跳过校验
+            if not isinstance(gate.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", gate["sha256"]) or gate.get("template") not in ("v3", "v4") or not isinstance(gate.get("checked_at"), str) or not gate["checked_at"]:  # 验证摘要模板及检查时间字段
+                raise _error(f"第 {index} 集门禁摘要无效")  # 给出可读的清单修复提示
     if not isinstance(course.get("scope"), dict):  # 范围对象必须独立存在
         raise _error("课程清单缺少有效范围")  # 提示清单不完整
     selected_items(course)  # 验证已保存的范围配置
@@ -379,18 +386,78 @@ def _note_path(root, course, item):  # 默认按讲义编号命名并对重复�
     return candidate  # 只有确认没有占用的路径才交给 Agent
 
 
+def run_gate(root, course, item):  # 进程内执行本集笔记门禁并返回摘要
+    import validate_note  # 惰性加载现有门禁而不创建子进程
+    root = Path(root)  # 统一业务路径类型
+    note = root / (item.get("note") or item.get("planned_note") or "")  # 优先检查正式笔记并支持已计划路径
+    folder = root / "videos" / item["bvid"]  # 只使用本视频的抓取目录
+    metadata = folder / "metadata.json"  # 门禁元数据位置固定
+    result = {"errors": 0, "warnings": 0, "sha256": "", "template": course.get("template", "v4"), "checked_at": now(), "first_errors": []}  # 返回统一门禁摘要结构
+    try:  # 路径读取和编码异常统一转为门禁错误
+        note.resolve().relative_to(root.resolve())  # 课程外笔记不能冒充课程产物
+        if not note.is_file() or not metadata.is_file():  # 缺笔记或元数据必须失败而不能宽松通过
+            result.update(errors=1, first_errors=["GATE: 笔记文件不存在" if not note.is_file() else "GATE: 元数据文件不存在"])  # 提供可直接转述的首错
+            return result  # 不调用缺少输入的校验器
+        raw = note.read_bytes()  # 摘要严格基于文件原始UTF8字节
+        report = validate_note.check_note_dispatch(raw.decode("utf-8"), note, meta_path=metadata, txt_dir=folder, only_page=item["page"], template=result["template"], note_type=None)  # 使用同一分派入口和本集限定参数
+        result.update(errors=len(report["errors"]), warnings=len(report["warnings"]), sha256=hashlib.sha256(raw).hexdigest(), first_errors=[f"{error['check']}: {error['message']}" for error in report["errors"][:3]])  # 保存计数和最多三条首错
+    except (OSError, ValueError, TypeError, KeyError) as exc:  # 读取或路径问题也必须阻止完成而非泄漏内部异常
+        result.update(errors=1, first_errors=[f"GATE: 无法检查笔记：{exc}"])  # 明确门禁失败原因供恢复使用
+    return result  # 调用者决定拒绝完成或恢复待办
+
+
+def recheck(root, course):  # 重新核验选定范围中的完成笔记并一次保存变更
+    root = Path(root)  # 文件路径以课程目录为基准
+    reopened, changed = [], False  # 恢复列表与持久化变更分开记录
+    for item in selected_items(course):  # 范围外历史完成项不受影响
+        if item["status"] != "done":  # 只复核原已完成项
+            continue  # 待办运行中和失败项均保持原样
+        note = root / (item.get("note") or "")  # 不把草稿误作正式完成文件
+        reason, next_step = "", ""  # 仅需要重开时填写恢复原因
+        if not note.is_file():  # 正式文件缺失直接恢复制作
+            reason, next_step = "笔记文件不见了", "重新制作这一集"  # 使用方案规定文案
+        else:  # 文件仍在时先检查原字节摘要和模板
+            gate = item.get("gate") or {}  # 没有缓存的旧版完成项需要真实门禁
+            try:  # 读取失败仍需交给统一门禁回报
+                digest = hashlib.sha256(note.read_bytes()).hexdigest()  # 内容未变可免去重复校验
+            except OSError:  # 不可读文件不能命中摘要缓存
+                digest = None  # 随后的门禁生成可恢复错误
+            if gate.get("sha256") == digest and gate.get("template") == course.get("template", "v4"):  # 仅摘要和模板均一致时跳过
+                continue  # 不刷新时间也不重写清单
+            checked = run_gate(root, course, item)  # 旧版或已变化项重新执行真实门禁
+            if not checked["errors"]:  # 有效改动保持完成并刷新缓存
+                item["gate"] = {key: value for key, value in checked.items() if key != "first_errors"}  # 持久化摘要不带错误正文
+                changed = True  # 缓存更新也是需要保存的变化
+                continue  # 成功项不进入恢复列表
+            reason, next_step = "笔记门禁未通过：" + checked["first_errors"][0], "按门禁报告修改这篇笔记"  # 首错直接供恢复交接
+        item.update(status="pending", planned_note=item.get("note"), note=None, reason=reason, next_step=next_step)  # 保持原输出路径并撤销完成状态
+        reopened.append(item["index"])  # 返回全局课程序号
+        changed = True  # 多集变化统一延后保存
+    if changed:  # 无变化保持只读且不刷新清单时间
+        save_course(root, course)  # 全部重检结束只保存一次
+    return reopened  # next和verify共享恢复结果
+
+
+def verify(root):  # 显式重检选定范围的已完成笔记
+    course = load_course(root)  # 读取最新清单并验证可选门禁字段
+    checked = sum(item["status"] == "done" for item in selected_items(course))  # 统计重检前原完成数量
+    reopened = recheck(root, course)  # 与next使用同一恢复和持久化逻辑
+    return {"checked": checked, "passed": checked - len(reopened), "reopened": reopened}  # 重开项从通过数量中扣除
+
+
 def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
     root = Path(root).resolve()  # 将所有输出路径变成绝对路径
     course = load_course(root)  # 读取唯一状态来源
     if not course["scope"].get("mode"):  # 未得到用户选择不得开始
         hint_exit("尚未确认课程范围", "本次不会开始制作笔记", "先向用户展示确认文案，再运行 start 选择范围")  # 给出恢复步骤
+    reopened = recheck(root, course)  # 开始交接前恢复缺失或不合格的完成笔记
     chosen = selected_items(course)  # 历史完成状态与当前范围分开计算
     item = next((entry for entry in chosen if entry["status"] == "running"), None)  # 中断后优先继续原来的一集
     if item is None:  # 没有未完成的运行中任务
         item = next((entry for entry in chosen if entry["status"] == "pending"), None)  # 按课程序号取下一集
     counts = {state: sum(entry["status"] == state for entry in chosen) for state in ("done", "failed")}  # 仅统计范围内结果
     if item is None:  # 失败集不会自动重试造成无限循环
-        return {"status": "finished", **counts, "failed_items": [entry["index"] for entry in chosen if entry["status"] == "failed"]}  # 汇总本轮执行
+        return {"status": "finished", **counts, "failed_items": [entry["index"] for entry in chosen if entry["status"] == "failed"], "reopened": reopened}  # 结束回执也明确本次恢复列表
     if item["status"] != "running":  # 首次交出时才设置开始时间
         item.update(status="running", started_at=now())  # 重复 next 不覆盖计时起点
         save_course(root, course)  # 原子保存后再交出命令
@@ -424,9 +491,9 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
     steps = [  # 脚本不执行这些命令，交给 Agent 串行处理
         {"kind": "fetch", "skip": fetched, "cmd": command_text(fetch), "argv": fetch, "why": "这个视频已抓取过（metadata.json 已存在）" if fetched else "首次处理这个视频，先抓取元数据和字幕"},  # 同 BV 不重复抓取
         {"kind": "transcribe", "skip": completed, "cmd": command_text(transcribe), "argv": transcribe, "why": "这一集已有可信字幕或完成的转写稿" if completed else "抓取后按 subtitle_detail 决定：cc / ai 且正式文本存在则跳过，否则仅转写这一集"},  # 探测提示不是实际字幕产出的保证
-        {"kind": "note", "note_path": str(note), "txt_dir": str(folder), "metadata": str(metadata), "nav_cmd": command_text(nav), "nav_argv": nav, "validate_cmd": command_text(validate), "validate_argv": validate},  # 笔记按原模板要求制作
+        {"kind": "note", "note_path": str(note), "txt_dir": str(folder), "metadata": str(metadata), "nav_cmd": command_text(nav), "nav_argv": nav, "validate_cmd": command_text(validate), "validate_argv": validate, "existing_note": note.is_file(), "reason": item.get("reason")},  # 已有笔记和恢复原因交给制作步骤
     ]  # 每集固定三个阶段
-    return {"status": "next", "index": item["index"], "total_in_scope": len(chosen), **counts, "item": dict(item), "steps": steps}  # 返回快照避免调用方误改持久状态
+    return {"status": "next", "index": item["index"], "total_in_scope": len(chosen), **counts, "item": dict(item), "steps": steps, "reopened": reopened}  # 正常交接回执包含恢复序号
 
 
 def mark(root, index, state, note=None, reason=None, next_step=None, rerun=None):  # 回报单集结果并输出人类可读进度
@@ -448,6 +515,10 @@ def mark(root, index, state, note=None, reason=None, next_step=None, rerun=None)
         if not note or not path.is_file():  # 目录不能冒充笔记文件
             hint_exit("笔记文件不存在", "这一集尚未标记完成", "先完成笔记与门禁，再通过 --note 指定真实文件")  # 门禁是否通过由 Agent 负责
         item["note"] = relative.as_posix()  # 存储跨平台相对路径
+        gate = run_gate(root, course, item)  # 原路径校验通过后执行真实笔记门禁
+        if gate["errors"]:  # 有任何错误都不能提交完成状态
+            hint_exit("笔记门禁未通过：" + gate["first_errors"][0], "这一集尚未标记完成", "按门禁报告修改这篇笔记后重新 mark")  # 失败退出且不写清单
+        item["gate"] = {key: value for key, value in gate.items() if key != "first_errors"}  # 只持久化通过后的门禁摘要
     if state == "failed" and not (reason or "").strip():  # 失败必须附有可操作原因
         hint_exit("标记失败时缺少原因", "本次没有修改课程清单", "通过 --reason 填写失败原因，可附 --next-step")  # 禁止空白原因
     if state == "pending":  # 手工补跑清空结果而不改集身份
@@ -518,6 +589,8 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
     choices.add_argument("--all", dest="all_", action="store_true")  # 选择全部时执行规模门禁
     status_parser = commands.add_parser("status", help="只读查询当前范围进度")  # 定义只读查询子命令
     status_parser.add_argument("root", metavar="ROOT")  # 接受清单根目录
+    verify_parser = commands.add_parser("verify", help="重检已完成笔记并恢复待办")  # 显式提供与next共享的复核入口
+    verify_parser.add_argument("root", metavar="ROOT")  # 从指定课程目录加载清单
     next_parser = commands.add_parser("next", help="交出下一集执行步骤")  # 串行编排只产生命令
     next_parser.add_argument("root", metavar="ROOT")  # 从清单恢复执行状态
     mark_parser = commands.add_parser("mark", help="记录单集结果或补跑")  # 所有结果写入唯一清单
@@ -532,7 +605,7 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
         args = parser.parse_args(argv)  # 支持调用者提供参数列表
         options = vars(args).copy()  # 生成业务函数关键字参数
         command = options.pop("command")  # 子命令名称不传入业务函数
-        result = {"plan": plan, "start": start, "status": status, "next": course_next, "mark": mark}[command](**options)  # 分发并获取结构化结果
+        result = {"plan": plan, "start": start, "status": status, "next": course_next, "mark": mark, "verify": verify}[command](**options)  # 分发新复核命令并保持现有入口
     except HintError as exc:  # 已经具备三段式信息的错误
         print(json.dumps({"status": "error", **exc.to_dict()}, ensure_ascii=False))  # 即使失败也保留末行机器可读 JSON
         raise  # 交给公共入口包装输出人类提示
