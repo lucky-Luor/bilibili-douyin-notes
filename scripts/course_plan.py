@@ -1,0 +1,396 @@
+import argparse  # 解析命令行参数
+import copy  # 复制已有进度以保证校验失败不修改原对象
+import json  # 读写课程清单
+import math  # 校验数值并计算剩余耗时
+import re  # 严格解析范围参数
+import sys  # 配置终端编码并输出提示
+import time  # 控制字幕探测间隔
+from datetime import datetime, timezone  # 生成带时区的时间戳
+from pathlib import Path  # 处理课程目录
+
+import bili_fetch  # 复用抓取接口和共享转写比例
+from _hints import HintError, run_cli  # 复用三段式错误提示和入口包装
+
+NOTE_SECONDS = 90  # 每集笔记的预计整理时间
+FETCH_SECONDS_PER_ITEM = 5  # 每集抓取的预计时间
+MAX_ITEMS = 200  # 一次选择全部时允许的最大集数
+MAX_HOURS = 100  # 一次选择全部时允许的最大视频小时数
+PROBE_LIMIT = 60  # 默认最多探测的集数
+PROBE_INTERVAL = 0.3  # 相邻字幕探测之间的间隔秒数
+COURSE_FILE = "course.json"  # 课程清单的固定文件名
+ITEM_METADATA = {"index", "bvid", "page", "cid", "title", "section", "video_title", "duration"}  # 重建清单时必须更新的元数据
+ITEM_STATES = {"pending", "running", "done", "failed", "out_of_scope"}  # 支持的执行状态
+
+
+def now():  # 返回可供其它阶段复用的当前时间
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")  # 使用带时区的标准时间格式
+
+
+def _error(reason, next_step="检查参数或课程清单后重试"):  # 构造统一可读错误
+    return HintError(str(reason), "课程计划未更新", next_step)  # 保持原因影响下一步三段信息
+
+
+def _number(value, label="时长"):  # 将接口数值转换为有限非负数
+    if isinstance(value, bool):  # 布尔值不是合法数值
+        raise _error(f"{label}必须是非负数")  # 避免静默接受错误元数据
+    try:  # 兼容接口返回的数字字符串
+        result = float(value or 0)  # 缺失时按零处理
+    except (TypeError, ValueError, OverflowError):  # 非数值给出可读提示
+        raise _error(f"{label}必须是非负数") from None  # 隐藏底层转换异常
+    if not math.isfinite(result) or result < 0:  # 拒绝无穷数和负数
+        raise _error(f"{label}必须是有限非负数")  # 防止非法估算进入文件
+    return result  # 返回有效数值
+
+
+def _positive(value, label):  # 校验严格的正整数
+    if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)):  # 不接受小数负数和布尔值
+        raise _error(f"{label}必须是正整数")  # 统一参数错误说明
+    result = int(value)  # 转换通过格式校验的整数
+    if result < 1:  # 零不属于可选索引
+        raise _error(f"{label}必须大于零")  # 明确索引从一开始
+    return result  # 返回正整数
+
+
+def _validate_course(course):  # 校验读取到的清单结构
+    if not isinstance(course, dict) or course.get("version") != 1:  # 当前阶段仅支持第一版清单
+        raise _error("课程清单格式或版本无效")  # 避免错误覆盖不兼容文件
+    if course.get("kind") not in ("pages", "season") or not isinstance(course.get("source_url"), str):  # 校验课程来源和类别
+        raise _error("课程清单缺少有效来源或类别")  # 返回结构错误提示
+    items = course.get("items")  # 获取全部课程条目
+    if not isinstance(items, list) or not items:  # 已保存课程必须至少有一集
+        raise _error("课程清单没有有效条目")  # 拒绝损坏的空清单
+    for index, item in enumerate(items, 1):  # 验证全局连续索引
+        if not isinstance(item, dict) or item.get("index") != index:  # 防止重复或跳号索引
+            raise _error("课程条目索引必须从一连续递增")  # 避免范围选择错误
+        if not item.get("bvid") or not item.get("cid") or item.get("status") not in ITEM_STATES:  # 校验必需执行字段
+            raise _error(f"第 {index} 集缺少有效标识或状态")  # 明确损坏条目位置
+        _positive(item.get("page"), "分P序号")  # 确保分P序号有效
+        _number(item.get("duration"), "视频时长")  # 确保耗时计算不会接受非法值
+    if not isinstance(course.get("scope"), dict):  # 范围对象必须独立存在
+        raise _error("课程清单缺少有效范围")  # 提示清单不完整
+    selected_items(course)  # 验证已保存的范围配置
+    return course  # 供读取和保存共同使用
+
+
+def load_course(root):  # 读取并校验课程清单
+    path = Path(root) / COURSE_FILE  # 固定从根目录加载清单
+    try:  # 将文件和编码问题转换为可读错误
+        course = json.loads(path.read_text(encoding="utf-8-sig"))  # 兼容带字节标记的既有文件
+    except (OSError, ValueError, UnicodeError) as exc:  # 捕获文件缺失和格式错误
+        raise _error(f"无法读取课程清单：{exc}", "确认目录中的 course.json 存在且是有效 JSON；首次使用请先运行 plan") from None  # 不输出堆栈
+    return _validate_course(course)  # 返回经过结构校验的对象
+
+
+def save_course(root, course):  # 原子保存课程清单
+    _validate_course(course)  # 写入前完整校验清单
+    path = Path(root) / COURSE_FILE  # 构造目标路径
+    try:  # 统一目录和写文件错误
+        text = json.dumps(course, ensure_ascii=False, indent=2, allow_nan=False) + "\n"  # 保留中文并拒绝非有限数
+        path.parent.mkdir(parents=True, exist_ok=True)  # 校验完成后才创建根目录
+        bili_fetch.atomic_write_text(path, text)  # 复用已有原子写入实现
+    except (OSError, TypeError, ValueError, UnicodeError) as exc:  # 转换文件权限和序列化错误
+        raise _error(f"无法保存课程清单：{exc}", "检查输出目录权限和课程数据后重试") from None  # 保留三段式提示
+    return path  # 返回已保存文件的位置
+
+
+def _bounds(scope, count):  # 将独立范围对象转换为包含首尾的索引区间
+    mode = scope.get("mode")  # 获取范围选择方式
+    if mode in (None, "all"):  # 尚未确认时展示全部计划条目
+        return 1, count  # 全部范围不依赖条目状态
+    if mode == "first":  # 选择前若干集
+        return 1, min(_positive(scope.get("first"), "首批集数"), count)  # 正数超出总数时截断
+    if mode == "range":  # 选择严格的连续区间
+        value = scope.get("range")  # 支持清单保存的两端列表
+        if isinstance(value, str):  # 兼容命令行风格的历史值
+            match = re.fullmatch(r"([0-9]+)-([0-9]+)", value)  # 不接受隐式空格和省略边界
+            value = list(match.groups()) if match else None  # 将有效文本转成两个边界
+        if not isinstance(value, (list, tuple)) or len(value) != 2:  # 区间必须恰有两个边界
+            raise _error("范围必须使用起止序号，例如 2-5")  # 给出可直接采用的示例
+        first, last = _positive(value[0], "范围起点"), _positive(value[1], "范围终点")  # 严格校验两个整数
+        if first > last or last > count:  # 范围禁止反向和越界
+            raise _error(f"范围必须满足 1 ≤ 起点 ≤ 终点 ≤ {count}")  # 明确有效区间
+        return first, last  # 返回包含端点的区间
+    raise _error("课程范围模式无效")  # 拒绝未知模式
+
+
+def selected_items(course):  # 依据独立范围选择条目而不依赖执行状态
+    items = course.get("items", [])  # 获取全部条目
+    first, last = _bounds(course.get("scope") or {}, len(items))  # 计算合法范围边界
+    return [item for item in items if first <= item["index"] <= last]  # 返回原条目引用供后续阶段更新
+
+
+def estimate(items):  # 估算给定条目的规模和处理耗时
+    items = list(items)  # 同时支持列表和迭代器
+    duration = sum(_number(item.get("duration")) for item in items)  # 累加视频秒数
+    count = len(items)  # 每个分P独立计作一项
+    asr = sum(_number(item.get("duration")) for item in items if item.get("subtitle_hint", "unknown") != "has") * bili_fetch.ASR_RATIO  # 仅需转写的条目采用共享比例
+    seconds = asr + count * (NOTE_SECONDS + FETCH_SECONDS_PER_ITEM)  # 按完整规定公式估算
+    hours = duration / 3600  # 阈值以视频小时数计算
+    return {"videos": len({item["bvid"] for item in items}), "items": count, "asr_items": sum(item.get("subtitle_hint", "unknown") != "has" for item in items), "hours": hours, "duration": duration, "asr_seconds": asr, "note_seconds": count * NOTE_SECONDS, "fetch_seconds": count * FETCH_SECONDS_PER_ITEM, "total_seconds": seconds, "seconds": seconds, "estimated_seconds": seconds, "oversize": count > MAX_ITEMS or hours > MAX_HOURS}  # 返回规模和可机器读取的估算
+
+
+def remaining_seconds(course):  # 按当前选择范围估算剩余耗时
+    items = selected_items(course)  # 仅统计已选择的条目
+    done = [item for item in items if item.get("status") == "done" and item.get("seconds") not in (None, "") and _number(item["seconds"], "实际耗时") > 0]  # 仅正数实测耗时参与均值
+    pending = [item for item in items if item.get("status") in ("pending", "running")]  # 失败条目不自动算作剩余任务
+    if done:  # 已有完成样本时采用实际耗时
+        return sum(_number(item.get("seconds"), "实际耗时") for item in done) / len(done) * len(pending)  # 平均耗时乘以剩余条目数
+    return estimate(pending)["seconds"]  # 无样本时退回剩余条目的完整公式
+
+
+def _source_bvid(source):  # 将视频链接规范化为来源标识
+    if not isinstance(source, str) or not source.strip():  # 空来源必须立即拒绝
+        raise _error("视频来源不能为空")  # 避免无意义的接口请求
+    return bili_fetch.extract_bvid(source)  # 复用已有短链接和标准链接解析
+
+
+def _view(bvid, cookie):  # 获取视频接口的完整数据对象
+    data = bili_fetch.api(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}", cookie).get("data")  # 公共接口返回完整响应
+    if not isinstance(data, dict) or not data:  # 缺失数据不能生成清单
+        raise _error("视频接口缺少有效 data")  # 将格式异常转换为可读错误
+    return data  # 保留 pages 和合集等所有字段
+
+
+def _pages(info):  # 提取视频分P并保留单P兼容路径
+    pages = info.get("pages")  # 优先使用完整分P列表
+    if isinstance(pages, list) and pages:  # 存在分P列表时直接采用
+        return pages  # 后续逐项校验必要字段
+    page = info.get("page")  # 合集条目通常仅提供一个 page 对象
+    if isinstance(page, dict) and page:  # 缺少 pages 时使用 episode.page
+        return [page]  # 不额外请求每个合集视频
+    if info.get("cid"):  # 普通单P元数据缺列表时保留有限兼容
+        return [{"page": 1, "cid": info["cid"], "part": info.get("title", ""), "duration": info.get("duration", 0)}]  # 合成单P元数据
+    raise _error("视频条目缺少分P信息")  # 不生成不可执行条目
+
+
+def _item(index, bvid, page, video_title, section=""):  # 构造统一的课程执行条目
+    cid = _positive(page.get("cid"), "视频 CID")  # 每项必须具有真实内容标识
+    title = str(page.get("part") or page.get("title") or video_title)  # 优先采用分P名称
+    return {"index": index, "bvid": bvid, "page": _positive(page.get("page", 1), "分P序号"), "cid": cid, "title": title, "section": section, "video_title": video_title, "duration": _number(page.get("duration", 0)), "subtitle_hint": "unknown", "status": "pending", "note": "", "started_at": None, "finished_at": None, "seconds": 0, "reason": "", "next_step": "", "rerun": ""}  # 初始化所有必需元数据和进度字段
+
+
+def _build(info, bvid, kind):  # 按分P或合集模式展开全局连续清单
+    if kind == "pages":  # 视频分P按原顺序展开
+        return [_item(index, bvid, page, str(info.get("title") or bvid)) for index, page in enumerate(_pages(info), 1)]  # 从一连续编号
+    season = info.get("ugc_season")  # B站合集数据由视频详情接口提供
+    if not isinstance(season, dict) or not season:  # 显式合集模式必须确实存在合集
+        raise _error("该视频没有可用合集", "改用 --scope pages 或换一个有合集的视频")  # 拒绝非法切换
+    items = []  # 保存各章节顺序展开的结果
+    for section in season.get("sections") or []:  # 按接口章节顺序处理
+        for episode in section.get("episodes") or []:  # 按章节内部的视频顺序处理
+            arc = episode.get("arc") or {}  # 视频标题和时长可能位于 arc 内
+            episode_bvid = episode.get("bvid") or arc.get("bvid")  # 兼容两种合集视频标识位置
+            if not episode_bvid:  # 不允许将缺失来源的视频默认为当前视频
+                raise _error("合集条目缺少 BV 号")  # 避免抓错内容
+            video_title = str(episode.get("title") or arc.get("title") or episode_bvid)  # 取得合集中的视频名称
+            for page in _pages(episode):  # 缺少 episode.pages 时自动使用 episode.page
+                item = _item(len(items) + 1, episode_bvid, page, video_title, str(section.get("title") or ""))  # 跨章节全局连续编号
+                if not item["duration"]:  # 单P合集常把时长只放在 arc 内
+                    item["duration"] = _number(episode.get("duration") or arc.get("duration")) if len(_pages(episode)) == 1 else 0  # 多P不重复使用视频总时长
+                items.append(item)  # 保留合集顺序和全部条目
+    if not items:  # 空合集不能作为有效课程
+        raise _error("合集没有可用视频条目")  # 明确拒绝保存空计划
+    return items  # 返回展开后的完整清单
+
+
+def _key(item):  # 返回稳定的进度匹配键
+    return item.get("bvid"), item.get("cid"), item.get("page")  # 相同分P在不同范围间共享结果
+
+
+def _merge(items, previous):  # 重建元数据并保留共同条目的结果和历史字段
+    old = {_key(item): item for item in (previous or {}).get("history", []) + (previous or {}).get("items", [])}  # 在模式切换往返后仍保留已执行结果
+    for item in items:  # 遍历新计划中的所有条目
+        history = old.get(_key(item), {})  # 查找共同条目
+        item.update({key: value for key, value in history.items() if key not in ITEM_METADATA})  # 保留状态字幕提示和可选扩展历史
+    return items  # 返回就地合并后的新条目
+
+
+def _apply_scope(course):  # 将范围标记与结果状态协调更新
+    selected = {item["index"] for item in selected_items(course)}  # 独立范围是唯一筛选依据
+    for item in course["items"]:  # 范围外仍保留历史完成和失败结果
+        if item["index"] not in selected and item["status"] in ("pending", "running"):  # 范围外未完成执行条目
+            item["status"] = "out_of_scope"  # 明确标记为本轮不处理
+        elif item["index"] in selected and item["status"] == "out_of_scope":  # 新范围重新包含此前排除条目
+            item["status"] = "pending"  # 恢复为待处理状态
+
+
+def _probe(items, cookie, probe_all=False):  # 以单轮字幕接口探测课程提示
+    candidates = items if probe_all else items[:PROBE_LIMIT]  # 默认限制探测规模
+    for index, item in enumerate(candidates):  # 顺序探测避免请求并发
+        if index:  # 首次请求不等待
+            time.sleep(PROBE_INTERVAL)  # 每次探测之间至少间隔零点三秒
+        diagnostics = {}  # 接收公共抓取函数的请求成功和失败计数
+        try:  # 单集异常不阻断整个计划
+            usable, saw_track = bili_fetch.fetch_subtitles(item["bvid"], item["cid"], cookie, rounds=1, diagnostics=diagnostics)  # 只读轨道信息不下载字幕正文
+            if diagnostics.get("failed", 0) and not diagnostics.get("succeeded", 0):  # 明确全失败时才不能作字幕判断
+                item["subtitle_hint"] = "unknown"  # 不把请求失败误判为无字幕
+            else:  # 至少一个接口请求成功才允许作出判断
+                item["subtitle_hint"] = "has" if usable else "track_only" if saw_track else "none"  # 区分可用字幕轨道和真实无字幕
+        except Exception:  # 包括网络异常和接口异常
+            item["subtitle_hint"] = "unknown"  # 保守保留未知状态供后续阶段处理
+
+
+def _season_summary(info, items, kind):  # 仅持久化合集的精简摘要
+    if kind != "season":  # 分P模式不持久化完整合集响应
+        return None  # 用空值明确当前不是合集计划
+    season = info.get("ugc_season") or {}  # 获取内嵌合集元数据
+    videos = len({item["bvid"] for item in items})  # 根据实际展开结果统计视频数
+    return {"id": season.get("id"), "title": season.get("title", ""), "ep_count": season.get("ep_count", videos), "videos": videos}  # 保留必要的身份和规模信息
+
+
+def _duration_text(seconds):  # 将预计耗时转为适合用户阅读的文案
+    minutes = math.ceil(seconds / 60)  # 向上取整避免显示零分钟
+    return f"约 {minutes // 60} 小时 {minutes % 60} 分钟" if minutes > 90 else f"约 {minutes} 分钟"  # 超过九十分钟改用小时分钟
+
+
+def _report(course, root):  # 构造机器回执和可直接转述的确认文案
+    full = estimate(course["items"])  # 计划展示完整课程规模
+    current = estimate(selected_items(course))  # 确认回执展示当前范围估算
+    alternative = course.get("season_alt")  # 仅多P有合集时存在替代规模
+    options = "要怎么做？\n1. 全部做\n2. 先做前 3 集看效果\n3. 指定范围（例如 2-5）"  # 非超限课程提供三种选择
+    if full["oversize"]:  # 超限确认不提供全部做选项
+        options = "超过单次处理上限，要怎么做？\n1. 先做前 3 集看效果\n2. 指定范围（例如 2-5）"  # 仅提供小范围选项
+    text = f"这是一门{'分P' if course['kind'] == 'pages' else '合集'}课程《{course.get('title', '')}》：共 {full['items']} 集、约 {full['hours']:.1f} 小时，{full['asr_items']} 集需要语音识别，预计{_duration_text(current['total_seconds'])}（按 6 核笔记本 CPU 估算，先做第 1 集后按实际用时修正）。\n{options}"  # 规模和时间依据完整说明
+    if full["items"] > PROBE_LIMIT:  # 只在超过默认探测上限时说明保守预估
+        text += f"\n默认最多探测前 {PROBE_LIMIT} 集；其余集数按需要语音识别预估，可用 --probe-all 全部探测。"  # 探测失败或跳过均不会承诺有字幕
+    if course["kind"] == "season":  # 合集单P入口应提供另一种范围
+        text += "\n也可以只做这一个视频（--scope pages）。"  # 不强制展开合集
+    if alternative is not None and course["kind"] == "pages":  # 多P同时有合集时给出替代规模
+        suffix = "——超出单次处理上限，只能指定范围" if alternative["oversize"] else ""  # 防止诱导处理超大合集
+        text += f"\n也可按合集展开（{alternative['videos']} 个视频、共 {alternative['items']} 集、约 {alternative['hours']:.1f} 小时）{suffix}。"  # 明确另一种组织方式的规模
+    result = {"course": True, "root": str(Path(root)), "course_json": str(Path(root) / COURSE_FILE), "course_file": str(Path(root) / COURSE_FILE), "source_url": course["source_url"], "kind": course["kind"], "title": course.get("title", ""), "owner": course.get("owner", ""), "items": full["items"], "videos": full["videos"], "hours": full["hours"], "asr_items": full["asr_items"], "oversize": full["oversize"], "estimate_minutes": current["total_seconds"] / 60, "estimate": copy.deepcopy(current), "scope": copy.deepcopy(course["scope"]), "season_alt": copy.deepcopy(alternative), "confirm_text": text, "probe_limit": PROBE_LIMIT}  # 回执的集数字段始终为数值
+    if course.get("hint_optional"):  # 保留可选登录建议
+        result["hint_optional"] = course["hint_optional"]  # 业务函数返回提示但不主动打印
+    return result  # 由主入口统一输出 JSON
+
+
+def plan(source_url, root, scope=None, probe_all=False, no_probe=False):  # 建立或刷新课程计划
+    if scope not in (None, "pages", "season") or probe_all and no_probe:  # 离线直接调用也要校验互斥参数
+        raise _error("课程模式或字幕探测参数无效")  # 在任何写入前拒绝参数
+    previous = load_course(root) if (Path(root) / COURSE_FILE).exists() else None  # 既有清单损坏时禁止覆盖
+    bvid = _source_bvid(source_url)  # 将当前来源规范为视频标识
+    if previous and _source_bvid(previous["source_url"]) != bvid:  # 同一目录禁止混用不同视频来源
+        raise _error("输出目录已属于另一个视频来源", "使用原视频链接或换一个空目录")  # 异源拒绝并且不写文件
+    cookie = bili_fetch.load_sessdata()  # 只在实际计划命令中读取共享登录状态
+    info = _view(bvid, cookie)  # 一次获取视频详情和内嵌合集
+    pages, season = _pages(info), info.get("ugc_season")  # 获取默认模式的判断依据
+    if scope is None and len(pages) == 1 and not season:  # 单P且没有合集不视为课程
+        return {"course": False, "source_url": source_url, "bvid": bvid, "pages": len(pages), "title": str(info.get("title") or bvid), "root": str(Path(root))}  # 不创建目录或清单
+    kind = scope or ("pages" if len(pages) > 1 else "season")  # 多P默认分P单P有合集默认合集
+    if previous and previous["kind"] != kind:  # plan 不静默切换已有课程种类
+        raise _error("已有课程模式不同", f"使用 start {root} --scope {kind} 并显式选择处理范围")  # 交给已授权的显式切换路径
+    items = _merge(_build(info, bvid, kind), previous)  # 展开课程并按稳定标识复用结果
+    course = copy.deepcopy(previous) if previous else {}  # 保留可选的顶层历史字段
+    course.update({"version": 1, "source_url": previous["source_url"] if previous else source_url, "kind": kind, "title": str(((season or {}).get("title") or info.get("title") or bvid) if kind == "season" else info.get("title") or bvid), "owner": (info.get("owner") or {}).get("name", ""), "season": _season_summary(info, items, kind), "created_at": previous.get("created_at") if previous else now(), "scope": copy.deepcopy(previous["scope"]) if previous else {"mode": None, "first": None, "range": None, "confirmed_at": None}, "estimate": estimate(items), "items": items})  # 写入完整课程模式和执行元数据
+    if len(pages) > 1 and season:  # 仅多P同时带合集时提供替代规模提示
+        course["season_alt"] = estimate(_build(info, bvid, "season"))  # 计算合集视频数条目数小时数和超限标记
+    else:  # 避免保留已失效的替代提示
+        course.pop("season_alt", None)  # 单P合集不提供该字段
+    for item in items:  # 新一轮探测不继承旧字幕判断
+        item["subtitle_hint"] = "unknown"  # 未探测及关闭探测时全部保持未知
+    if not no_probe:  # 显式关闭时不调用字幕接口
+        _probe(items, cookie, probe_all)  # 默认仅前六十集其余保留未知
+    course["estimate"] = estimate(selected_items(course))  # 探测后按当前范围重新估算转写开销
+    known = [item for item in items if item["subtitle_hint"] != "unknown"]  # 提示比例跳过未知条目
+    course.pop("hint_optional", None)  # 刷新旧的可选登录提示
+    if not cookie and known and sum(item["subtitle_hint"] == "none" for item in known) > len(known) / 2:  # 未登录且已知条目无字幕超过一半
+        course["hint_optional"] = "本次未登录且多数已探测条目没有字幕；可运行 python scripts/bili_fetch.py --login 后重新 plan。"  # 登录仅为可选提示
+    _apply_scope(course)  # 同范围重跑时保持范围外终态结果
+    save_course(root, course)  # 所有元数据和选择校验通过后才落盘
+    result = _report(course, root)  # 返回计划结果供入口和离线测试使用
+    result["reused"] = previous is not None  # 明确本次是否复用了历史清单
+    return result  # 复用标记只属于命令回执
+
+
+def start(root, first=None, range_=None, all_=False, scope=None):  # 确认处理范围并允许显式切换课程模式
+    if scope not in (None, "pages", "season"):  # 直接调用也必须拒绝未知类别
+        raise _error("课程模式必须是 pages 或 season")  # 无效参数不得修改磁盘
+    if sum((first is not None, range_ is not None, bool(all_))) != 1:  # 三种范围必须恰选一种
+        raise _error("请且仅请选择 --first、--range 或 --all", "例如 start ROOT --first 5")  # 明确必需的确认动作
+    first = _positive(first, "首批集数") if first is not None else None  # 尽早拒绝非正整数
+    course = copy.deepcopy(load_course(root))  # 保证校验过程不会修改已加载进度
+    if scope is not None and scope != course["kind"]:  # 仅显式 scope 支持切换类别
+        bvid = _source_bvid(course["source_url"])  # 切换始终复用原来源
+        info = _view(bvid, bili_fetch.load_sessdata())  # 获取同源的另一类条目
+        items = _merge(_build(info, bvid, scope), course)  # 共有分P保留全部结果和扩展字段
+        history = {_key(item): copy.deepcopy(item) for item in course.get("history", []) + course["items"]}  # 保存暂时移出模式的集结果
+        course["history"] = list(history.values())  # 切换回原模式时按稳定身份恢复
+        course.update({"kind": scope, "items": items, "title": str((info.get("ugc_season") or {}).get("title") or info.get("title") or bvid) if scope == "season" else str(info.get("title") or bvid), "season": _season_summary(info, items, scope), "estimate": estimate(items)})  # 更新类别相关元数据
+        if len(_pages(info)) > 1 and info.get("ugc_season"):  # 替代规模只适用于多P合集
+            course["season_alt"] = estimate(_build(info, bvid, "season"))  # 切换后同步替代规模
+        else:  # 当前来源不再需要替代提示
+            course.pop("season_alt", None)  # 避免返回过期字段
+    selection = {"mode": "first" if first is not None else "range" if range_ is not None else "all", "first": min(first, len(course["items"])) if first is not None else None, "range": range_, "confirmed_at": now()}  # 创建独立确认对象
+    bounds = _bounds(selection, len(course["items"]))  # 校验严格范围后再变更状态
+    if selection["mode"] == "range":  # 在清单中统一保存两个整数边界
+        selection["range"] = list(bounds)  # 避免后续阶段重复解析文本
+    if all_ and estimate(course["items"])["oversize"]:  # 过大课程禁止一次确认全部
+        raise _error(f"课程超过 {MAX_ITEMS} 集或 {MAX_HOURS} 小时，不能选择 --all", "使用 --first N 或 --range A-B 分批确认")  # 保证拒绝时不写文件
+    course["scope"] = selection  # 完整校验后才应用选择范围
+    _apply_scope(course)  # 更新范围外待执行状态并保留完成失败结果
+    course["estimate"] = estimate(selected_items(course))  # 持久估算始终按已确认范围重算
+    save_course(root, course)  # 只保存合法确认结果
+    result = _report(course, root)  # 构造确认回执
+    result["items_in_scope"] = len(selected_items(course))  # 返回当前范围集数
+    result["pending"] = sum(item["status"] == "pending" for item in selected_items(course))  # 返回当前范围待执行集数
+    result["remaining_seconds"] = remaining_seconds(course)  # 附加当前范围的剩余耗时
+    return result  # 不在业务函数中打印输出
+
+
+def status(root):  # 只读查询当前范围的进度
+    course = load_course(root)  # 不创建目录或重写清单
+    items = selected_items(course)  # 状态统计只包含独立选择范围
+    counts = {state: sum(item["status"] == state for item in items) for state in sorted(ITEM_STATES)}  # 所有状态始终提供明确计数
+    counts["total"] = len(items)  # 提供所选总集数
+    return {"course": True, "root": str(Path(root)), "source_url": course["source_url"], "kind": course["kind"], "title": course.get("title", ""), "scope": copy.deepcopy(course["scope"]), "counts": counts, "failed_items": [copy.deepcopy(item) for item in items if item["status"] == "failed"], "items": copy.deepcopy(items), "remaining_seconds": remaining_seconds(course)}  # 返回完整的只读进度回执
+
+
+class _Parser(argparse.ArgumentParser):  # 让参数错误沿用项目三段式提示
+    def error(self, message):  # 替换默认的英文用法错误出口
+        raise _error(f"命令行参数错误：{message}", "运行 course_plan.py --help 查看 plan/start/status 用法")  # 由统一入口处理而不打印堆栈
+
+
+def main(argv=None):  # 支持显式参数列表以便离线调用
+    for stream in (sys.stdout, sys.stderr):  # 同时设置标准输出和错误输出编码
+        try:  # 捕获测试流或宿主不支持重新配置的情况
+            stream.reconfigure(encoding="utf-8", errors="replace")  # 保证中文 JSON 和提示可打印
+        except (AttributeError, OSError, ValueError):  # 内存流无需重新配置
+            pass  # 保持原有可写流
+    parser = _Parser(description="B站课程计划：规划、确认范围和查看状态")  # 当前阶段只公开三个命令
+    commands = parser.add_subparsers(dest="command", required=True)  # 必须选择一个命令
+    plan_parser = commands.add_parser("plan", help="建立或刷新课程计划")  # 定义计划子命令
+    plan_parser.add_argument("source_url", metavar="URL")  # 接受视频链接或 BV 号
+    plan_parser.add_argument("root", metavar="ROOT")  # 接受输出课程根目录
+    plan_parser.add_argument("--scope", choices=("pages", "season"))  # 允许显式指定课程类别
+    probes = plan_parser.add_mutually_exclusive_group()  # 两种探测开关不能同时使用
+    probes.add_argument("--probe-all", action="store_true")  # 允许显式扩大字幕探测范围
+    probes.add_argument("--no-probe", action="store_true")  # 允许完全跳过字幕探测
+    start_parser = commands.add_parser("start", help="确认本次处理范围")  # 定义范围确认子命令
+    start_parser.add_argument("root", metavar="ROOT")  # 从指定根目录读取既有清单
+    start_parser.add_argument("--scope", choices=("pages", "season"))  # 显式切换同源课程类别
+    choices = start_parser.add_mutually_exclusive_group(required=True)  # 必须恰好确认一种范围
+    choices.add_argument("--first")  # 首批集数在业务函数中严格校验
+    choices.add_argument("--range", dest="range_")  # 接收包含首尾的区间文本
+    choices.add_argument("--all", dest="all_", action="store_true")  # 选择全部时执行规模门禁
+    status_parser = commands.add_parser("status", help="只读查询当前范围进度")  # 定义只读查询子命令
+    status_parser.add_argument("root", metavar="ROOT")  # 接受清单根目录
+    try:  # 参数和文件错误统一生成可读提示
+        args = parser.parse_args(argv)  # 支持调用者提供参数列表
+        options = vars(args).copy()  # 生成业务函数关键字参数
+        command = options.pop("command")  # 子命令名称不传入业务函数
+        result = {"plan": plan, "start": start, "status": status}[command](**options)  # 分发并获取结构化结果
+    except HintError as exc:  # 已经具备三段式信息的错误
+        print(json.dumps({"status": "error", **exc.to_dict()}, ensure_ascii=False))  # 即使失败也保留末行机器可读 JSON
+        raise  # 交给公共入口包装输出人类提示
+    except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:  # 将文件参数和接口结构异常转换为可读错误
+        error = _error(f"无法完成课程操作：{exc}")  # 隐藏底层错误堆栈
+        print(json.dumps({"status": "error", **error.to_dict()}, ensure_ascii=False))  # 输出统一错误摘要
+        raise error from None  # 交给公共入口包装处理
+    if result.get("hint_optional"):  # 可选登录建议同时出现在结构化回执中
+        print("提示：" + result["hint_optional"], file=sys.stderr)  # 人类提示只输出到错误流
+    print(json.dumps(result, ensure_ascii=False, allow_nan=False))  # 标准输出最后一行为中文无转义 JSON
+    return result  # 便于离线测试和后续阶段直接调用
+
+
+if __name__ == "__main__":  # 只在直接执行脚本时运行命令行
+    run_cli(main)  # 复用项目入口确保错误只有三段提示没有堆栈

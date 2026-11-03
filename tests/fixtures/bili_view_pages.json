@@ -1,0 +1,20 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "bvid": "BV1zMpaeTEJa",
+    "aid": 100001,
+    "title": "第二章",
+    "owner": {"mid": 1000, "name": "测试UP主"},
+    "duration": 1800,
+    "videos": 4,
+    "cid": 1000011,
+    "pages": [
+      {"cid": 1000011, "page": 1, "from": "vupload", "part": "2.1", "duration": 600},
+      {"cid": 1000012, "page": 2, "from": "vupload", "part": "2.2", "duration": 500},
+      {"cid": 1000013, "page": 3, "from": "vupload", "part": "2.3", "duration": 400},
+      {"cid": 1000014, "page": 4, "from": "vupload", "part": "2.4", "duration": 300}
+    ]
+  }
+}

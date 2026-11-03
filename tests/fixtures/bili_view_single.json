@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "bvid": "BV1mK4y1C7Bz",
+    "aid": 400001,
+    "title": "独立单P视频",
+    "owner": {"mid": 1000, "name": "测试UP主"},
+    "duration": 300,
+    "videos": 1,
+    "cid": 4000011,
+    "pages": [
+      {"cid": 4000011, "page": 1, "from": "vupload", "part": "独立单P视频", "duration": 300}
+    ]
+  }
+}

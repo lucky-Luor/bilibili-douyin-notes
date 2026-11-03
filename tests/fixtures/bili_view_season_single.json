@@ -1,0 +1,86 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "bvid": "BV1AbCdEfGhJ",
+    "aid": 300001,
+    "title": "单P合集第一讲",
+    "owner": {"mid": 1000, "name": "测试UP主"},
+    "duration": 300,
+    "videos": 1,
+    "cid": 3000011,
+    "pages": [
+      {"cid": 3000011, "page": 1, "from": "vupload", "part": "单P合集第一讲", "duration": 300}
+    ],
+    "season_id": 3000,
+    "is_season_display": true,
+    "ugc_season": {
+      "id": 3000,
+      "title": "三个单P视频合集",
+      "mid": 1000,
+      "ep_count": 3,
+      "sections": [
+        {
+          "id": 30001,
+          "season_id": 3000,
+          "title": "默认分节",
+          "type": 1,
+          "episodes": [
+            {
+              "id": 300011,
+              "season_id": 3000,
+              "section_id": 30001,
+              "aid": 300001,
+              "bvid": "BV1AbCdEfGhJ",
+              "cid": 3000011,
+              "title": "单P合集第一讲",
+              "arc": {
+                "aid": 300001,
+                "title": "单P合集第一讲",
+                "videos": 1,
+                "duration": 300,
+                "author": {"mid": 1000, "name": "测试UP主"}
+              },
+              "page": {"cid": 3000011, "page": 1, "from": "vupload", "part": "单P合集第一讲", "duration": 300}
+            },
+            {
+              "id": 300012,
+              "season_id": 3000,
+              "section_id": 30001,
+              "aid": 300002,
+              "bvid": "BV1GKaG6zEtr",
+              "cid": 3000021,
+              "title": "单P合集第二讲",
+              "arc": {
+                "aid": 300002,
+                "title": "单P合集第二讲",
+                "videos": 1,
+                "duration": 400,
+                "author": {"mid": 1000, "name": "测试UP主"}
+              },
+              "page": {"cid": 3000021, "page": 1, "from": "vupload", "part": "单P合集第二讲", "duration": 400}
+            },
+            {
+              "id": 300013,
+              "season_id": 3000,
+              "section_id": 30001,
+              "aid": 300003,
+              "bvid": "BV1Q541167Qg",
+              "cid": 3000031,
+              "title": "单P合集第三讲",
+              "arc": {
+                "aid": 300003,
+                "title": "单P合集第三讲",
+                "videos": 1,
+                "duration": 500,
+                "author": {"mid": 1000, "name": "测试UP主"}
+              },
+              "page": {"cid": 3000031, "page": 1, "from": "vupload", "part": "单P合集第三讲", "duration": 500}
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
