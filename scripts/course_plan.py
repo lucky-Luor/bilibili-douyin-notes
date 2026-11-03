@@ -64,6 +64,8 @@ def _validate_course(course):  # 校验读取到的清单结构
         raise _error("课程字幕探测模式必须是 default、all 或 none")  # 拒绝未知模式避免误导报告
     if "template" in course and course["template"] not in ("v4", "v4-obsidian"):  # 可选字段缺失保持旧课程兼容
         raise _error("课程模板必须是 v4 或 v4-obsidian")  # 坏模板禁止进入编排步骤
+    if course.get("asr_lang") not in (None, "zh", "en", "auto"):  # 缺字段旧清单等同未设置语言
+        raise _error("课程 asr_lang 必须是 zh、en、auto 或 null")  # 阻止非法语言进入后续命令
     items = course.get("items")  # 获取全部课程条目
     if not isinstance(items, list) or not items:  # 已保存课程必须至少有一集
         raise _error("课程清单没有有效条目")  # 拒绝损坏的空清单
@@ -297,6 +299,7 @@ def plan(source_url, root, scope=None, probe_all=False, no_probe=False):  # 建�
         raise _error("已有课程模式不同", f"使用 start {root} --scope {kind} 并显式选择处理范围")  # 交给已授权的显式切换路径
     items = _merge(_build(info, bvid, kind), previous)  # 展开课程并按稳定标识复用结果
     course = copy.deepcopy(previous) if previous else {}  # 保留可选的顶层历史字段
+    course.setdefault("asr_lang", None)  # 新清单和旧清单刷新统一显式存储未指定语言
     course.update({"version": 1, "source_url": previous["source_url"] if previous else source_url, "kind": kind, "title": str(((season or {}).get("title") or info.get("title") or bvid) if kind == "season" else info.get("title") or bvid), "owner": (info.get("owner") or {}).get("name", ""), "season": _season_summary(info, items, kind), "created_at": previous.get("created_at") if previous else now(), "scope": copy.deepcopy(previous["scope"]) if previous else {"mode": None, "first": None, "range": None, "confirmed_at": None}, "estimate": estimate(items), "items": items})  # 写入完整课程模式和执行元数据
     if len(pages) > 1 and season:  # 仅多P同时带合集时提供替代规模提示
         course["season_alt"] = estimate(_build(info, bvid, "season"))  # 计算合集视频数条目数小时数和超限标记
@@ -319,7 +322,9 @@ def plan(source_url, root, scope=None, probe_all=False, no_probe=False):  # 建�
     return result  # 复用标记只属于命令回执
 
 
-def start(root, first=None, range_=None, all_=False, scope=None, template=None):  # 确认范围及目标笔记模板
+def start(root, first=None, range_=None, all_=False, scope=None, template=None, asr_lang=None):  # 保留模板位置参数并在尾部追加语言
+    if asr_lang not in (None, "zh", "en", "auto"):  # 直接调用与命令行采用相同枚举
+        raise _error("ASR 语言必须是 zh、en 或 auto")  # 参数无效时不读写清单
     if scope not in (None, "pages", "season"):  # 直接调用也必须拒绝未知类别
         raise _error("课程模式必须是 pages 或 season")  # 无效参数不得修改磁盘
     if sum((first is not None, range_ is not None, bool(all_))) != 1:  # 三种范围必须恰选一种
@@ -337,6 +342,7 @@ def start(root, first=None, range_=None, all_=False, scope=None, template=None):
     if template != previous_template and done_count:  # 已完成结果留给下一轮门禁复查
         template_warnings.append(f"课程模板已改为 {template}，已有 {done_count} 篇完成笔记；下次 next 将复查。")  # 明确篇数与恢复入口
     course["template"] = template  # 顶层持久化新模板而不清空既有结果
+    course["asr_lang"] = asr_lang if asr_lang is not None else course.get("asr_lang")  # 重选范围未传语言时保留既有选择
     if scope is not None and scope != course["kind"]:  # 仅显式 scope 支持切换类别
         bvid = _source_bvid(course["source_url"])  # 切换始终复用原来源
         info = _view(bvid, bili_fetch.load_sessdata())  # 获取同源的另一类条目
@@ -539,7 +545,8 @@ def run_gate(root, course, item):  # 进程内执行本集笔记门禁并返回�
             result.update(errors=1, first_errors=["GATE: 笔记文件不存在" if not note.is_file() else "GATE: 元数据文件不存在"])  # 提供可直接转述的首错
             return result  # 不调用缺少输入的校验器
         raw = note.read_bytes()  # 摘要严格基于文件原始UTF8字节
-        report = validate_note.check_note_dispatch(raw.decode("utf-8"), note, meta_path=metadata, txt_dir=folder, only_page=item["page"], template=result["template"], note_type=None)  # 使用同一分派入口和本集限定参数
+        language_options = {"source_lang": course["asr_lang"]} if course.get("asr_lang") else {}  # 非空课程语言显式转发且旧调用不增加参数
+        report = validate_note.check_note_dispatch(raw.decode("utf-8"), note, meta_path=metadata, txt_dir=folder, only_page=item["page"], template=result["template"], note_type=None, **language_options)  # 无显式语言时由目标分集元数据回退
         result.update(errors=len(report["errors"]), warnings=len(report["warnings"]), sha256=hashlib.sha256(raw).hexdigest(), first_errors=[f"{error['check']}: {error['message']}" for error in report["errors"][:3]])  # 保存计数和最多三条首错
     except (OSError, ValueError, TypeError, KeyError) as exc:  # 读取或路径问题也必须阻止完成而非泄漏内部异常
         result.update(errors=1, first_errors=[f"GATE: 无法检查笔记：{exc}"])  # 明确门禁失败原因供恢复使用
@@ -627,9 +634,13 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
         save_course(root, course)  # 恢复时不把自己的文件当成陌生文件
     fetch = script_argv("bili_fetch.py", item["bvid"], folder)  # 抓取命令只针对当前 BV
     transcribe = script_argv("bili_transcribe.py", metadata, "--page", item["page"])  # ASR 一次只处理这一集
+    if course.get("asr_lang") is not None:  # 不覆盖转写器原有缺省行为
+        transcribe.extend(["--lang", course["asr_lang"]])  # 将明确选择原样传给识别入口
     template = course.get("template", "v4")  # 缺字段旧课程继续采用四版
     common = [note, "--meta", metadata, "--txt-dir", folder, "--page", item["page"], "--template", template]  # 导航与门禁共用课程模板及页码
     nav, validate = script_argv("note_nav.py", *common), script_argv("validate_note.py", *common)  # 按先导航后最终门禁顺序执行
+    if course.get("asr_lang") not in (None, "zh"):  # 外语与自动模式显式交给术语门禁
+        validate.extend(["--source-lang", course["asr_lang"]])  # 导航器不接收语言参数
     steps = [  # 脚本不执行这些命令，交给 Agent 串行处理
         {"kind": "fetch", "skip": fetched, "cmd": command_text(fetch), "argv": fetch, "why": "这个视频已抓取过（metadata.json 已存在）" if fetched else "首次处理这个视频，先抓取元数据和字幕"},  # 同 BV 不重复抓取
         {"kind": "transcribe", "skip": completed, "cmd": command_text(transcribe), "argv": transcribe, "why": "这一集已有可信字幕或完成的转写稿" if completed else "抓取后按 subtitle_detail 决定：cc / ai 且正式文本存在则跳过，否则仅转写这一集"},  # 探测提示不是实际字幕产出的保证
@@ -727,6 +738,7 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
     start_parser.add_argument("root", metavar="ROOT")  # 从指定根目录读取既有清单
     start_parser.add_argument("--scope", choices=("pages", "season"))  # 显式切换同源课程类别
     start_parser.add_argument("--template", choices=("v4", "v4-obsidian"))  # 可选覆盖配置中的默认笔记模板
+    start_parser.add_argument("--asr-lang", choices=("zh", "en", "auto"))  # 明确课程识别语言并保留不传时的原行为
     choices = start_parser.add_mutually_exclusive_group(required=True)  # 必须恰好确认一种范围
     choices.add_argument("--first")  # 首批集数在业务函数中严格校验
     choices.add_argument("--range", dest="range_")  # 接收包含首尾的区间文本

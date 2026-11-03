@@ -9,6 +9,12 @@ import pytest  # 测试框架
 import yt_fetch  # 被测模块
 
 
+@pytest.fixture(autouse=True)  # 所有入口回归禁止读取真实配置
+
+def no_config(monkeypatch):  # 隔离本机配置文件
+    monkeypatch.setattr(yt_fetch, "load_config", lambda: {})  # 使用空配置避免读取凭据
+
+
 # ---------- extract_video_id ----------
 
 @pytest.mark.parametrize("text", [  # 各种链接形态都应解析出同一个 ID
@@ -100,6 +106,9 @@ def _install_fake_transcript_api(monkeypatch, tracks=None, error=None):
         def __init__(self, code, gen):
             self.language_code, self.is_generated = code, gen  # 语言与是否自动
 
+        def fetch(self):  # 实际接口由轨道对象直接抓取并区分人工与自动
+            return [Snip(1.2, f"{self.language_code}-text")]  # 保留现有片段契约
+
     class TList(list):  # 模拟 TranscriptList
         def find_transcript(self, codes):
             t = next(x for x in self if x.language_code == codes[0])  # 找到对应轨道
@@ -156,7 +165,7 @@ def _fake_info(**over):
 def test_main_with_subtitles(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(yt_fetch, "fetch_info", lambda vid, o: _fake_info())  # 元数据 mock
     monkeypatch.setattr(yt_fetch, "fetch_via_transcript_api",  # 一级返回自动字幕（含滚动重复）
-                        lambda vid, l, p: ([{"start": 0, "text": "a"}, {"start": 1, "text": "a b"}], "auto", "en"))
+                        lambda vid, l, p, result=None: ([{"start": 0, "text": "a"}, {"start": 1, "text": "a b"}], "auto", "en"))  # 兼容尾部语言结果参数
     yt_fetch.main(["https://youtu.be/aircAruvnKk", str(tmp_path)])  # 运行
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])  # 最后一行摘要
     page = summary["pages"][0]  # 唯一分P
@@ -177,7 +186,7 @@ def test_main_blocked_falls_back_to_ytdlp(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(yt_fetch, "fetch_via_transcript_api", blocked)  # 注入
     monkeypatch.setattr(yt_fetch, "fetch_via_ytdlp",  # 二级成功
-                        lambda info, l, o: ([{"start": 2, "text": "hi"}], "ytdlp_manual", "en"))
+                        lambda info, l, o, result=None: ([{"start": 2, "text": "hi"}], "ytdlp_manual", "en"))  # 兼容尾部语言结果参数
     yt_fetch.main(["aircAruvnKk", str(tmp_path)])  # 运行
     page = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["pages"][0]  # 摘要分P
     assert page["subtitle_detail"] == "ytdlp_manual"  # 回退到 yt-dlp

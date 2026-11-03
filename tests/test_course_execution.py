@@ -121,6 +121,48 @@ def course(tmp_path, offline):  # 以闭包支持未确认首批及指定范围�
     return create  # 后续场景只补充自己需要的执行状态
 
 
+@pytest.mark.parametrize("lang", [None, "zh", "en", "auto"])  # 三种语言及缺省均可通过公开入口
+
+def test_course_asr_language_argv(course, capsys, lang):  # 新选项只影响转写与门禁命令
+    root = course(confirmed=False)  # 保留未确认状态用于真实命令行测试
+    assert read_course(root)["asr_lang"] is None  # 新清单顶层字段缺省为空
+    argv = ["start", root, "--all"] + (["--asr-lang", lang] if lang else [])  # 仅显式设置时传参数
+    invoke(capsys, *argv)  # 命令行解析后调用业务函数
+    assert read_course(root)["asr_lang"] == lang  # 语言写入清单顶层
+    result = cp.course_next(root)  # 观察可直接执行的参数数组
+    transcribe = step_of(result, "transcribe")["argv"]  # 转写命令
+    note = step_of(result, "note")  # 门禁与导航命令
+    assert (transcribe[-2:] == ["--lang", lang]) if lang else "--lang" not in transcribe  # 非空语言才传入识别
+    assert (note["validate_argv"][-2:] == ["--source-lang", lang]) if lang in ("en", "auto") else "--source-lang" not in note["validate_argv"]  # 中文保持原门禁参数
+    assert "--source-lang" not in note["nav_argv"] and "--lang" not in note["nav_argv"]  # 导航参数保持兼容
+    if lang:  # 重新确认范围时不丢失已有偏好
+        cp.start(root, all_=True)  # 旧参数列表仍然可调用
+        assert read_course(root)["asr_lang"] == lang  # 省略选项保留已存选择
+
+
+@pytest.mark.parametrize("bad", ["fr", "", True, 3, []])  # 非枚举值一律拒绝
+
+def test_course_rejects_bad_asr_language_without_write(course, bad):  # 业务函数与存储结构都校验新字段
+    root = course()  # 有效清单用于检查原子拒绝
+    before = (root / "course.json").read_bytes()  # 保存原始清单
+    with pytest.raises(cp.HintError):  # 直接调用也不得绕过参数校验
+        cp.start(root, all_=True, asr_lang=bad)  # 尝试非法语言
+    assert (root / "course.json").read_bytes() == before  # 拒绝时不落盘
+    data = read_course(root)  # 注入损坏清单验证读取校验
+    data["asr_lang"] = bad  # 仅损坏新字段
+    write_course(root, data)  # 临时测试清单
+    with pytest.raises(cp.HintError):  # 读取必须拒绝无效值
+        cp.load_course(root)  # 不交出含非法参数的命令
+
+
+def test_course_legacy_asr_field_optional(course):  # 历史清单缺字段仍然兼容
+    root = course()  # 先创建有效清单
+    data = read_course(root)  # 读取快照
+    data.pop("asr_lang", None)  # 模拟旧版本清单
+    write_course(root, data)  # 保存旧结构
+    assert "--lang" not in step_of(cp.course_next(root), "transcribe")["argv"]  # 旧清单保持原命令
+
+
 def test_next_requires_explicit_start(course):  # 未确认范围不得自动开始执行
     root = course(confirmed=False)  # 只建立计划而不调用范围确认
     before = (root / "course.json").read_bytes()  # 保存拒绝前的完整状态

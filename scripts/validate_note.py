@@ -70,8 +70,7 @@ def substantive_lines(lines: list[str]) -> list[str]:
     return [l for l in lines if l.strip() and l.strip() != "---"]
 
 
-# ==================== 检查14（B2 新增，自包含可搬运函数） ====================
-
+# ==================== 检查14（B2 新增，自包含可搬运函数） =============
 def check_image_manifest(note_path: Path, manifest_path: Path) -> dict:
     """manifest 图注 keyword + 时间对齐交叉校验（检查14，warning 级）。
 
@@ -159,8 +158,7 @@ def check_image_manifest(note_path: Path, manifest_path: Path) -> dict:
     return result
 
 
-# ==================== 公共解析常量与工具（v3 / v4 共用） ====================
-# 说明：V2_ 前缀为历史命名（最早随 v2 门禁引入），v1/v2 规则已移除，
+# ==================== 公共解析常量与工具（v3 / v4 共用） =============# 说明：V2_ 前缀为历史命名（最早随 v2 门禁引入），v1/v2 规则已移除，
 # 这些常量与下方工具函数现由 v3 / v4 门禁共用。
 
 V2_ANCHOR_RE = re.compile(r"\[(\d{1,3}):(\d{2})\]")
@@ -441,8 +439,7 @@ def validate_mermaid_blocks(lines: list[str], start: int,
     return blocks, problems
 
 
-# ==================== v3 门禁（模板 v3：复习资料定位，正文全面禁时刻） ====================
-# v3 定位（2026-10-04）：笔记是"看完课替代手写笔记"的复习资料——
+# ==================== v3 门禁（模板 v3：复习资料定位，正文全面禁时刻） =============# v3 定位（2026-10-04）：笔记是"看完课替代手写笔记"的复习资料——
 #   * 正文（目录/标题/要点/代码注释/概念卡/答案）全面禁止时间戳（V3-E1，代码块
 #     内同样扫描）；时刻只允许出现在文末「## 视频时间索引」的 NAV 折叠区（一级
 #     章节粒度条目，深链由 scripts/note_nav.py 机械填充）；
@@ -1145,8 +1142,7 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
             "errors": errors, "warnings": warnings, "checks": checks}
 
 
-# ==================== v4 门禁（模板 v4：语雀直导版式） ====================
-# v4 定位（2026-10-21）：内容规则与 v3 相同（正文全面禁时刻、废除三词标签），
+# ==================== v4 门禁（模板 v4：语雀直导版式） =============# v4 定位（2026-10-21）：内容规则与 v3 相同（正文全面禁时刻、废除三词标签），
 # 版式改为可直接导入语雀的纯 Markdown——
 #   * 无 frontmatter、无一级标题（文件名 <序号>-<主题>.md 即标题），首行即
 #     「> 核心主线：」引语块；元信息改由 --template v4 / --note-type / --meta 提供；
@@ -1186,7 +1182,7 @@ V4_INDEX_HEADING = "视频时间索引"  # 时间索引小节标题关键词
 V4_NAV_ENTRY_RE = re.compile(
     r"^\s*[-*+]\s+\[(\d{1,3}):(\d{2})\](?:\(([^)\s]*)\))?\s+(\S.*?)\s*$")  # 组：分/秒/URL/标题
 # V4-E6：概念卡字段行，列表符号兼容 + / - / *
-V4_CARD_FIELD_RE = re.compile(r"^\s*[-*+]\s*(定义|出现|依赖|易混)\s*[：:]\s*(.*)$")  # 组：字段名/值
+V4_CARD_FIELD_RE = re.compile(r"^\s*[-*+]\s*(定义|出现|依赖|易混|原文)\s*[：:]\s*(.*)$")  # 组：字段名和值并保留原文术语
 # V4-E6：「出现」单项「第 N 节「小节名」」
 V4_APPEAR_ITEM_RE = re.compile(r"第\s*(\d{1,2})\s*节\s*「([^」]*)」")  # 组：节号/小节名
 # V4-E4：行首三词标签前缀（列表符号兼容 +）
@@ -1348,7 +1344,7 @@ def v4_image_section_problems(lines: list[str], fence_state: list[bool],
 
 def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体复用四版全部正文门禁
                   txt_dir: Path | None, only_page: int | None = None,  # 保留既有位置参数兼容性
-                  note_type: str | None = None, variant: str | None = None) -> dict:  # 黑曜石通过显式变体进入
+                  note_type: str | None = None, variant: str | None = None, source_lang: str | None = None) -> dict:  # 保留变体位置并在尾部追加来源语言
     """v4 门禁：语雀直导版式（无 frontmatter / + 列表 / 答案与索引不折叠），内容规则同 v3。
 
     元信息来源：note_type 取参数 > metadata.json 的 suggested_note_type > lecture；
@@ -1400,6 +1396,13 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
             nt = declared.lower()  # 正文规则采用元信息类型
         platform = fm.get("platform") if isinstance(fm.get("platform"), str) else platform  # 元信息提供平台身份
         vid = next((fm[key] for key in ("bvid", "video_id") if isinstance(fm.get(key), str) and fm[key]), vid)  # 来源标识用于深链校验
+    language = source_lang  # 显式参数优先于分集元数据
+    if language is None:  # 没有显式覆盖时仅查目标分集
+        pages = meta_raw.get("pages") or []  # 兼容没有分集的旧元数据
+        page = next((p for p in pages if isinstance(p, dict) and p.get("page") == only_page), None) if only_page is not None else (pages[0] if len(pages) == 1 and isinstance(pages[0], dict) else None)  # 多分集无目标时不猜测
+        if page is not None:  # 按实际识别音频字幕的顺序取首个非空值
+            language = next((str(page[key]).strip() for key in ("asr_lang", "audio_lang", "subtitle_lang") if page.get(key) and str(page[key]).strip()), None)  # 空字段不能阻挡后续语言
+    foreign_lecture = nt == "lecture" and bool(language) and not str(language).strip().lower().startswith("zh")  # 中文前缀及未知语言不提示
 
     # ---- V4-NT：note_type 取值 ----
     if nt not in ("lecture", "short"):  # 非法取值
@@ -1564,6 +1567,32 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
                               "不在概念卡片集合内", conf[1])  # 提示
     checks["concept_cards"] = {"passed": not any(e["check"] == "V4-E6" for e in errors),
                                "cards": len(cards)}  # 明细
+
+    if foreign_lecture:  # 仅外语讲义要求中文术语保留原文
+        body_lines = []  # 编号节叙述范围不含目录概念卡与标题本身
+        in_body = False  # 编号节之外均不参与首次出现判定
+        for index, line in enumerate(lines):  # 保留原始行号供告警定位
+            if fence_state[index]:  # 示例代码不算正文术语首次出现
+                continue  # 跳过整个代码块
+            if H2_RE.match(line):  # 新章节重新判断正文范围
+                in_body = bool(V2_H2_NUM_RE.match(line))  # 只有编号节才是正文
+                continue  # 小节标题不算正文叙述
+            if in_body:  # 只收集编号节内容
+                body_lines.append((index + 1, line.replace("**", "")))  # 兼容整体加粗与仅卡名加粗
+        for card in cards:  # 每张中文概念卡独立检查
+            name = card["name"].replace("**", "").strip()  # 去除标题装饰
+            if not re.search(r"[\u3400-\u9fff]", name):  # 纯英文概念无需重复原文
+                continue  # 只检查中文卡名
+            original = card["fields"].get("原文")  # 获取可选原文字段
+            if not original or not original[0].strip():  # 字段缺失与空字段都提示
+                warn("V4-TERM", f"概念卡「{name}」缺少非空「原文」字段", card["line"])  # 保持告警级别
+            first = next(((number, line, line.find(name)) for number, line in body_lines if name in line), None)  # 仅正文第一次出现
+            if first is not None:  # 正文未提及不凭空产生首次出现提示
+                number, line, position = first  # 取得首次出现的行与位置
+                suffix = line[position + len(name):]  # 中文卡名后必须立即跟括号原文
+                if not re.match(r"(?:（[^（）]*\S[^（）]*）|\([^()]*\S[^()]*\))", suffix):  # 两种括号均要求非空内容
+                    warn("V4-TERM", f"正文首次出现中文概念「{name}」后应紧跟（非空原文）", number)  # 不阻断既有门禁
+    checks["original_terms"] = {"checked": foreign_lecture, "source_lang": language, "passed": not any(w["check"] == "V4-TERM" for w in warnings)}  # 报告实际语言与术语检查结果
 
     # ---- V4-E5：自测题（不折叠；数量 4~7 / 2~3） ----
     quiz_head = find_h2_line(lines, "自测题")  # 自测题节
@@ -1850,11 +1879,11 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
     return report  # 普通四版与新变体共享出口
 
 
-def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = None,
-                        txt_dir: Path | None = None,
-                        only_page: int | None = None,
-                        template: str | None = None,
-                        note_type: str | None = None) -> dict:
+def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = None,  # 保留既有版本分派接口
+                        txt_dir: Path | None = None,  # 转写稿目录仍为可选参数
+                        only_page: int | None = None,  # 限定目标分集
+                        template: str | None = None,  # 显式模板选择
+                        note_type: str | None = None, source_lang: str | None = None) -> dict:  # 尾部语言参数仅用于第四版
     """版本分派入口：只支持 v4 与 v3（v1 / v2 规则已移除）。
 
     template="v4" 或笔记没有 frontmatter → check_note_v4（note_type 仅 v4 使用）；
@@ -1864,10 +1893,10 @@ def check_note_dispatch(text: str, note_path: Path, meta_path: Path | None = Non
     fm = parse_frontmatter(text)  # 解析旧版声明仅用于路由
     chosen = (template or "").strip().lower()  # 显式普通四版必须优先保留元信息禁令
     if chosen != "v4" and (chosen == "v4-obsidian" or fm.get("template_version") == "v4-obsidian"):  # 新变体显式选择或声明自动检测
-        return check_note_v4(text, note_path, meta_path, txt_dir, only_page, note_type=note_type, variant="obsidian")  # 仅在变体内部剥离元信息
+        return check_note_v4(text, note_path, meta_path, txt_dir, only_page, note_type=note_type, variant="obsidian", source_lang=source_lang)  # 变体剥离元信息后继续执行来源语言术语检查
     if chosen == "v4" or not FRONTMATTER_RE.match(text):  # 显式 v4 或无 frontmatter
         return check_note_v4(text, note_path, meta_path, txt_dir, only_page,
-                             note_type=note_type)  # 交给 v4 规则集
+                             note_type=note_type, source_lang=source_lang)  # 交给第四版并传递可选来源语言
     version = (fm.get("template_version") or "").strip().lower()  # frontmatter 声明的版本
     if version == "v3":  # v3 老笔记
         return check_note_v3(text, note_path, meta_path, txt_dir, only_page)  # 交给 v3 规则集
@@ -1914,7 +1943,8 @@ def main():
     ap.add_argument("--note-type", choices=["lecture", "short"], default=None,
                     help="仅 v4：笔记类型；省略取 metadata.json 的 suggested_note_type，"
                          "再缺省为 lecture")  # v4 的 note_type 来源
-    args = ap.parse_args()
+    ap.add_argument("--source-lang", default=None, help="来源语言；省略取目标分集实际识别、音频或字幕语言")  # 仅第四版外语讲义检查术语原文
+    args = ap.parse_args()  # 解析包含可选来源语言的命令行
 
     note_path = Path(args.note)
     if not note_path.exists():
@@ -1930,7 +1960,7 @@ def main():
     # 版本分派：无 frontmatter / --template v4 → v4；frontmatter v3 → v3；其余报 VERSION。
     report = check_note_dispatch(text, note_path, meta_path, txt_dir,
                                  only_page=args.page, template=args.template,
-                                 note_type=args.note_type)  # v4 参数透传
+                                 note_type=args.note_type, source_lang=args.source_lang)  # 第四版参数透传
     print_json_report(report, indent=2)
     sys.exit(0 if report["ok"] else 1)
 
