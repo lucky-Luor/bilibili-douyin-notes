@@ -14,6 +14,7 @@ _CANDIDATES = [Path(__file__).resolve().parents[1], Path.cwd(), *Path.cwd().pare
 _REPO = next(path for path in _CANDIDATES if (path / "scripts" / "course_plan.py").is_file())  # 从真实脚本定位项目而非依赖临时目录层级
 sys.path.insert(0, str(_REPO / "scripts"))  # 与项目现有共享测试配置保持一致
 import course_plan as cp  # 通过公开业务函数及真实命令行入口验证执行协议
+import doctor  # 隔离共享配置读取器
 
 
 FIXTURE = Path(cp.__file__).resolve().parents[1] / "tests" / "fixtures" / "bili_view_pages.json"  # 始终复用仓库现有四集响应
@@ -80,7 +81,8 @@ def invoke(capsys, *argv):  # 校验真实命令行入口的返回值和输出�
 
 @pytest.fixture(autouse=True)  # 每个测试都封锁网络与真实登录状态
 
-def offline(monkeypatch):  # 安装最小且可观察的外部服务桩
+def offline(monkeypatch, tmp_path):  # 安装最小且可观察的外部服务桩
+    monkeypatch.setattr(doctor, "CONFIG", tmp_path / "isolated-settings.json")  # 禁止范围确认读取本机真实配置
     response = json.loads(FIXTURE.read_text(encoding="utf-8"))  # 复用已有页面固定响应
     state = SimpleNamespace(response=response, api_calls=[], probes=[], cookie_calls=0)  # 每个用例拥有独立调用记录
     def blocked(*args, **kwargs):  # 任一漏网请求直接终止测试

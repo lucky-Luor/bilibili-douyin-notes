@@ -10,6 +10,7 @@ from datetime import datetime, timezone  # 生成带时区的时间戳
 from pathlib import Path  # 处理课程目录
 
 import bili_fetch  # 复用抓取接口和共享转写比例
+from doctor import load_config  # 复用既有标准库配置读取工具
 from _hints import HintError, hint_exit, run_cli  # 复用三段式错误提示和入口包装
 
 NOTE_SECONDS = 90  # 每集笔记的预计整理时间
@@ -59,6 +60,8 @@ def _validate_course(course):  # 校验读取到的清单结构
         raise _error("课程清单缺少有效来源或类别")  # 返回结构错误提示
     if "probe" in course and course["probe"] not in ("default", "all", "none"):  # 兼容缺字段旧清单并校验新增探测枚举
         raise _error("课程字幕探测模式必须是 default、all 或 none")  # 拒绝未知模式避免误导报告
+    if "template" in course and course["template"] not in ("v4", "v4-obsidian"):  # 可选字段缺失保持旧课程兼容
+        raise _error("课程模板必须是 v4 或 v4-obsidian")  # 坏模板禁止进入编排步骤
     items = course.get("items")  # 获取全部课程条目
     if not isinstance(items, list) or not items:  # 已保存课程必须至少有一集
         raise _error("课程清单没有有效条目")  # 拒绝损坏的空清单
@@ -73,7 +76,7 @@ def _validate_course(course):  # 校验读取到的清单结构
             gate = item["gate"]  # 读取当前条目可选缓存
             if not isinstance(gate, dict) or any(type(gate.get(key)) is not int or gate[key] < 0 for key in ("errors", "warnings")):  # 拒绝缺失负数和布尔计数
                 raise _error(f"第 {index} 集门禁计数无效")  # 损坏缓存不得直接跳过校验
-            if not isinstance(gate.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", gate["sha256"]) or gate.get("template") not in ("v3", "v4") or not isinstance(gate.get("checked_at"), str) or not gate["checked_at"]:  # 验证摘要模板及检查时间字段
+            if not isinstance(gate.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", gate["sha256"]) or gate.get("template") not in ("v3", "v4", "v4-obsidian") or not isinstance(gate.get("checked_at"), str) or not gate["checked_at"]:  # 保留旧模板摘要并允许黑曜石变体的真实门禁缓存
                 raise _error(f"第 {index} 集门禁摘要无效")  # 给出可读的清单修复提示
     if not isinstance(course.get("scope"), dict):  # 范围对象必须独立存在
         raise _error("课程清单缺少有效范围")  # 提示清单不完整
@@ -314,13 +317,24 @@ def plan(source_url, root, scope=None, probe_all=False, no_probe=False):  # 建�
     return result  # 复用标记只属于命令回执
 
 
-def start(root, first=None, range_=None, all_=False, scope=None):  # 确认处理范围并允许显式切换课程模式
+def start(root, first=None, range_=None, all_=False, scope=None, template=None):  # 确认范围及目标笔记模板
     if scope not in (None, "pages", "season"):  # 直接调用也必须拒绝未知类别
         raise _error("课程模式必须是 pages 或 season")  # 无效参数不得修改磁盘
     if sum((first is not None, range_ is not None, bool(all_))) != 1:  # 三种范围必须恰选一种
         raise _error("请且仅请选择 --first、--range 或 --all", "例如 start ROOT --first 5")  # 明确必需的确认动作
     first = _positive(first, "首批集数") if first is not None else None  # 尽早拒绝非正整数
     course = copy.deepcopy(load_course(root))  # 保证校验过程不会修改已加载进度
+    if template is None:  # 仅缺省参数才访问可选配置
+        config = load_config()  # 测试替换共享工具路径，禁止读取真实配置
+        template = config.get("note_template") or "v4" if isinstance(config, dict) else "v4"  # 无配置仍采用原四版
+    if template not in ("v4", "v4-obsidian"):  # 直接业务调用与命令行一致校验
+        raise _error("笔记模板必须是 v4 或 v4-obsidian")  # 不写入未知模板
+    previous_template = course.get("template", "v4")  # 旧课程缺字段按原四版处理
+    template_warnings = []  # 仅在实际切换并有完成笔记时提示
+    done_count = sum(item["status"] == "done" for item in course["items"])  # 统计已有完成篇数
+    if template != previous_template and done_count:  # 已完成结果留给下一轮门禁复查
+        template_warnings.append(f"课程模板已改为 {template}，已有 {done_count} 篇完成笔记；下次 next 将复查。")  # 明确篇数与恢复入口
+    course["template"] = template  # 顶层持久化新模板而不清空既有结果
     if scope is not None and scope != course["kind"]:  # 仅显式 scope 支持切换类别
         bvid = _source_bvid(course["source_url"])  # 切换始终复用原来源
         info = _view(bvid, bili_fetch.load_sessdata())  # 获取同源的另一类条目
@@ -346,6 +360,7 @@ def start(root, first=None, range_=None, all_=False, scope=None):  # 确认处�
     result["items_in_scope"] = len(selected_items(course))  # 返回当前范围集数
     result["pending"] = sum(item["status"] == "pending" for item in selected_items(course))  # 返回当前范围待执行集数
     result["remaining_seconds"] = remaining_seconds(course)  # 附加当前范围的剩余耗时
+    result["template"], result["warnings"] = template, template_warnings  # 回执包含实际模板及切换提示
     return result  # 不在业务函数中打印输出
 
 
@@ -486,12 +501,13 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
         save_course(root, course)  # 恢复时不把自己的文件当成陌生文件
     fetch = script_argv("bili_fetch.py", item["bvid"], folder)  # 抓取命令只针对当前 BV
     transcribe = script_argv("bili_transcribe.py", metadata, "--page", item["page"])  # ASR 一次只处理这一集
-    common = [note, "--meta", metadata, "--txt-dir", folder, "--page", item["page"], "--template", "v4"]  # 导航与门禁使用同一页码
+    template = course.get("template", "v4")  # 缺字段旧课程继续采用四版
+    common = [note, "--meta", metadata, "--txt-dir", folder, "--page", item["page"], "--template", template]  # 导航与门禁共用课程模板及页码
     nav, validate = script_argv("note_nav.py", *common), script_argv("validate_note.py", *common)  # 按先导航后最终门禁顺序执行
     steps = [  # 脚本不执行这些命令，交给 Agent 串行处理
         {"kind": "fetch", "skip": fetched, "cmd": command_text(fetch), "argv": fetch, "why": "这个视频已抓取过（metadata.json 已存在）" if fetched else "首次处理这个视频，先抓取元数据和字幕"},  # 同 BV 不重复抓取
         {"kind": "transcribe", "skip": completed, "cmd": command_text(transcribe), "argv": transcribe, "why": "这一集已有可信字幕或完成的转写稿" if completed else "抓取后按 subtitle_detail 决定：cc / ai 且正式文本存在则跳过，否则仅转写这一集"},  # 探测提示不是实际字幕产出的保证
-        {"kind": "note", "note_path": str(note), "txt_dir": str(folder), "metadata": str(metadata), "nav_cmd": command_text(nav), "nav_argv": nav, "validate_cmd": command_text(validate), "validate_argv": validate, "existing_note": note.is_file(), "reason": item.get("reason")},  # 已有笔记和恢复原因交给制作步骤
+        {"kind": "note", "template": template, "note_path": str(note), "txt_dir": str(folder), "metadata": str(metadata), "nav_cmd": command_text(nav), "nav_argv": nav, "validate_cmd": command_text(validate), "validate_argv": validate, "existing_note": note.is_file(), "reason": item.get("reason")},  # 模板及已有笔记恢复原因共同交给制作步骤
     ]  # 每集固定三个阶段
     return {"status": "next", "index": item["index"], "total_in_scope": len(chosen), **counts, "item": dict(item), "steps": steps, "reopened": reopened}  # 正常交接回执包含恢复序号
 
@@ -583,6 +599,7 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
     start_parser = commands.add_parser("start", help="确认本次处理范围")  # 定义范围确认子命令
     start_parser.add_argument("root", metavar="ROOT")  # 从指定根目录读取既有清单
     start_parser.add_argument("--scope", choices=("pages", "season"))  # 显式切换同源课程类别
+    start_parser.add_argument("--template", choices=("v4", "v4-obsidian"))  # 可选覆盖配置中的默认笔记模板
     choices = start_parser.add_mutually_exclusive_group(required=True)  # 必须恰好确认一种范围
     choices.add_argument("--first")  # 首批集数在业务函数中严格校验
     choices.add_argument("--range", dest="range_")  # 接收包含首尾的区间文本
@@ -613,6 +630,8 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
         error = _error(f"无法完成课程操作：{exc}")  # 隐藏底层错误堆栈
         print(json.dumps({"status": "error", **error.to_dict()}, ensure_ascii=False))  # 输出统一错误摘要
         raise error from None  # 交给公共入口包装处理
+    for warning in result.get("warnings", []):  # 模板切换提示也供人类直接阅读
+        print("warning: " + warning, file=sys.stderr)  # 标准输出保持唯一机器摘要
     if result.get("hint_optional"):  # 可选登录建议同时出现在结构化回执中
         print("提示：" + result["hint_optional"], file=sys.stderr)  # 人类提示只输出到错误流
     print(json.dumps(result, ensure_ascii=False, allow_nan=False))  # 标准输出最后一行为中文无转义 JSON
