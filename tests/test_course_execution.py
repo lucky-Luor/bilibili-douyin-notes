@@ -321,6 +321,14 @@ def test_duplicate_lecture_names_are_disambiguated_by_global_index(course):  # �
     assert second.name == "002-2.13-业务流程建模.md" and first != second  # 全局索引保证稳定且不会覆盖
 
 
+def test_running_note_path_stays_stable_after_partial_file_written(course):  # 写笔记中断后仍交出原路径
+    root = course()  # 初始化课程执行
+    first = Path(step_of(cp.course_next(root), "note")["note_path"])  # 第一次分配输出位置
+    first.write_text("尚未写完的内容", encoding="utf-8")  # 模拟写到一半中断
+    second = Path(step_of(cp.course_next(root), "note")["note_path"])  # 同一运行中任务重新交接
+    assert second == first  # 防覆盖逻辑不得把本集自己的草稿当成他人文件
+
+
 def test_note_candidate_does_not_overwrite_saved_path_after_reindex(course):  # 模拟模式切换后旧完成集序号改变
     root = course()  # 初始当前视频课程
     data = read_course(root)  # 旧集已完成但现在被重新编号为第二集

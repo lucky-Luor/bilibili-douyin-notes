@@ -354,8 +354,8 @@ def command_text(argv):  # 展示命令始终给参数加引号
 
 
 def _note_path(root, course, item):  # 默认按讲义编号命名并对重复标题消歧
-    if item.get("note"):  # 补跑时保留已有笔记位置
-        return root / item["note"]  # 已保存路径相对课程目录
+    if item.get("note") or item.get("planned_note"):  # 补跑和中断恢复均保留已分配位置
+        return root / (item.get("note") or item["planned_note"])  # 正式路径与草稿路径都相对课程目录
     def filename(entry):  # 统一生成候选文件名
         title = bili_fetch.safe_name(entry["title"])  # 先清洗视频标题中的非法字符
         match = re.match(r"^(\d+\.\d+)(?:[\s.、_\-]+|$)(.*)", title)  # 识别章节式编号
@@ -365,7 +365,7 @@ def _note_path(root, course, item):  # 默认按讲义编号命名并对重复�
     collisions = [entry for entry in course["items"] if filename(entry).casefold() == name.casefold()]  # Windows 同名比较不区分大小写
     if len(collisions) > 1:  # 合集中不同视频可能拥有相同讲义编号
         name = f'{item["index"]:03d}-{name}'  # 用全局序号避免相互覆盖
-    reserved = {(root / entry["note"]).resolve().as_posix().casefold() for entry in course.get("history", []) + course["items"] if entry.get("note") and _key(entry) != _key(item)}  # 同时避让历史清单中其它集的已保存路径
+    reserved = {(root / path).resolve().as_posix().casefold() for entry in course.get("history", []) + course["items"] if _key(entry) != _key(item) for path in (entry.get("note"), entry.get("planned_note")) if path}  # 历史完成路径和已分配草稿都不能被其它集占用
     candidate = root / "notes" / name  # 先尝试标准候选名称
     serial = 0  # 文件已存在或被历史记录占用时稳定增加后缀
     while candidate.resolve().as_posix().casefold() in reserved or candidate.exists():  # 不覆盖未知文件或其它集的已完成笔记
@@ -413,6 +413,9 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
         note.parent.mkdir(parents=True, exist_ok=True)  # 支持新课程及多级目录
     except OSError as exc:  # 写权限失败使用统一提示
         raise HintError("无法创建笔记目录", "这一集尚未开始写笔记", "检查目录权限后重试 next", str(exc)) from None  # 不产生误完成状态
+    if not item.get("planned_note"):  # 一旦分配便持久保留，写到一半也不会漂移
+        item["planned_note"] = note.relative_to(root).as_posix()  # 独立于正式完成结果，pending可重用自己的草稿
+        save_course(root, course)  # 恢复时不把自己的文件当成陌生文件
     fetch = script_argv("bili_fetch.py", item["bvid"], folder)  # 抓取命令只针对当前 BV
     transcribe = script_argv("bili_transcribe.py", metadata, "--page", item["page"])  # ASR 一次只处理这一集
     common = [note, "--meta", metadata, "--txt-dir", folder, "--page", item["page"], "--template", "v4"]  # 导航与门禁使用同一页码
