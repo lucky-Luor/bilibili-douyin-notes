@@ -28,6 +28,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 ## ✨ Features
 
 - **Four platforms**: Bilibili (`bilibili.com` / `b23.tv` short links / BV IDs), Douyin (`douyin.com` / `v.douyin.com` / `iesdouyin.com` links / share text), YouTube (`youtube.com` / `youtu.be` / Shorts, official or auto captions first) and Xiaohongshu / RedNote (`xiaohongshu.com` / `xhslink.com` video-note share links)
+- **整门课**：发一个B站分P或合集链接，先列清单、报预估并确认范围，再逐集出笔记；支持进度回报、单集失败后继续及补跑
 - **Subtitles first**: fetches official / AI subtitles from Bilibili (login optional) — instant transcripts at zero cost
 - **Local ASR fallback**: when no subtitles exist, transcribes locally with faster-whisper (CPU int8; uses the hf-mirror inside mainland China). **No paid API calls**
 - **Key-frame screenshots**: anchored on transcript timestamps and extracted with PyAV; a local quality check flags black / blank / blurry frames (white-background slides are not misjudged), and the agent makes the final visual call
@@ -128,6 +129,16 @@ Talk to your agent:
 > Summarize this Douyin video: https://v.douyin.com/xxxx/
 >
 > Make notes from this YouTube video: https://www.youtube.com/watch?v=xxxx
+
+整门课先规划，Agent 原样展示确认文案并等待范围选择，以下示例只做前 3 集：
+
+```bash
+python scripts/course_plan.py plan "<B站链接>" "<课程目录>"
+python scripts/course_plan.py start "<课程目录>" --first 3
+python scripts/course_plan.py next "<课程目录>"
+```
+
+`next` 给出本集步骤；通过笔记门禁后 `mark … done --note …`，失败则 `mark … failed --reason …` 后继续。`status` 查询进度，`mark … pending` 补跑。多分P默认只做当前视频，展开合集用 `--scope season`；超过 200 集或 100 小时的清单只能选择范围。详见 [SKILL.md](SKILL.md)“整门课模式”。
 
 Or run the scripts by hand (see [SKILL.md](SKILL.md) for details):
 

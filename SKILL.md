@@ -39,6 +39,25 @@ python "<skill安装目录>/scripts/doctor.py" --platform <本次链接的平台
 - 只有 `WARN`：可以开工，开工前用一句话说明影响（如“没有显卡，这个无字幕视频大约要 X 分钟”“YouTube 连不上，需要代理”）
 - `skill 文件` 为 FAIL（被加密软件处理过）时，提示用户用 `git clone` 重新安装，不要尝试自己修文件
 
+### 整门课模式（B站，先于第一步判断）
+
+用户发来 B站链接或 BV号，环境自检通过后，先建立课程清单：
+
+```bash
+python "<skill安装目录>/scripts/course_plan.py" plan "<链接>" "<课程目录>"
+```
+
+1. 读取 stdout **最后一行 JSON**；`course:false` 表示单P无合集，继续下面的原单视频流程。`course:true` 时，把 `confirm_text` **原样发给用户**，并转述 `hint_optional`；用户没有回复，不能调用 `start` 或开始抓取、转写、写笔记。
+2. 用户选好范围后调用 `start "<课程目录>" --all`、`--first 3` 或 `--range 5-12`；用户选择另一种组织范围时加 `--scope pages|season`。多分P有合集时默认只做当前视频；单P有合集默认展开，也可选择只做当前视频。超过 200 集或 100 小时的清单禁止 `--all`，只能选前若干集或指定范围。
+3. 串行循环 `next "<课程目录>"`。`status:next` 的 `steps` 给出 fetch / transcribe / note 步骤；`skip:true` 不执行。优先按 `argv` 参数数组执行，避免含空格路径或特殊字符经过 shell 二次解释；`cmd` 是展示用命令。
+4. fetch 后重新检查**本集**的 `subtitle_detail` 和正式文本：`cc/ai` 且正式文本存在可跳过转写；其它无字幕状态走单集 ASR。`ai_mismatch` 的存疑文本不可用于笔记。读取转写逐集 JSON，`status:error` 即失败，即使进程退出码为 0；`nothing_to_do` 时也必须确认目标页及正式文本存在，不能直接视为成功。需要恢复元数据时按三段提示处理。
+5. 每集按第三步的全部规则独立制作 v4 笔记，使用 `note_path`，只读这一集的正式转写稿；不要把前面各集的全文持续留在上下文。截图仅用户明确要求时执行。按 `nav_cmd` 填深链，再按 `validate_cmd` 做最终门禁，确认 errors 为 0；两个命令都带本集 `--page N`。
+6. 成功后 `mark "<课程目录>" <序号> done --note "<笔记路径>"`；一集任何步骤失败，用该步的“原因 / 下一步”调用 `mark "<课程目录>" <序号> failed --reason "<原因>" --next-step "<下一步>"`，**继续下一集，不停下来反复询问用户**。课程批处理不强制扫码登录，可将可选登录建议留给用户；失败集可稍后补跑。
+7. 每次 `mark` 把摘要的 `progress` 原样转告用户。`next` 返回 `status:finished` 时汇报完成数、失败集和补跑方式。`status "<课程目录>"` 可只读查询；`mark "<课程目录>" <序号> pending` 可把失败集放回待处理，再调用 `next`。
+8. 中途被打断时再次 `next` 会重新交出原来的 running 集，已 done 的集在 I3 按清单状态跳过。`plan` 刷新同源同模式清单会保留结果；切换模式用 `start --scope`。不要把转写 `.done` 与课程笔记的 done 状态混为一谈，笔记门禁断点判断、课程索引和正式回执留给后续迭代。
+
+课程目录中的 `course.json` 是唯一状态来源；`videos/<BV号>/` 复用单视频抓取产物，同 BV 只抓取一次，`notes/` 每集一篇。默认最多探测 60 集字幕、间隔 0.3 秒；`plan --probe-all` 全探，`--no-probe` 跳过，未探测或失败按需要 ASR 保守估算。预估按六核笔记本 CPU，后续剩余时间使用已完成集的有效平均耗时修正。
+
 ### 第一步：抓取元数据 + 字幕（B站 / YouTube）或下载视频（抖音 / 小红书）
 
 ```bash
