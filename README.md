@@ -28,13 +28,14 @@
 ## ✨ 功能特性
 
 - **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）、抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）、YouTube（`youtube.com` / `youtu.be` / Shorts 链接，优先取官方/自动字幕）与小红书（`xiaohongshu.com` / `xhslink.com` 视频笔记分享链接）
-- **整门课**：发一个B站分P或合集链接，先列清单、报预估并确认范围，再逐集出笔记；支持进度回报、单集失败后继续及补跑
+- **整门课**：发一个B站分P或合集链接，先列清单、报预估并确认范围，再逐集出笔记；支持课程索引、完成回执、续跑门禁复查、单集失败后继续及补跑
 - **字幕优先**：自动抓取B站官方/AI字幕（可选登录），零成本秒出文稿
 - **ASR 兜底**：无字幕时用 faster-whisper 本地语音识别（CPU int8，国内走 hf-mirror 镜像），**不调任何付费 API**
 - **重点截图**：按转写稿时间戳锚点 + PyAV 抽帧，本地画质初筛自动**校验并标记**黑屏/空屏/模糊帧（像素占比法，白底 PPT 不误判），最终由 Agent 视觉复核决定取舍；无硬编码锚点时自动从文稿提取关键词
 - **抖音免登录**：游客身份访问公开视频，无需账号 Cookie；视频只用于本地转写，用完可清理
 - **小红书免登录**：解析分享页内嵌数据直接下载视频笔记，无签名、无需账号（仅支持视频笔记，不支持图文与评论）
-- **课堂笔记模板**：小节结构 + 关键术语加粗 + 真实代码引用 + 知识地图 + 概念卡片 + 自测题，文末附可回看跳转的视频时间索引
+- **课堂笔记模板**：小节结构 + 关键术语加粗 + 真实代码引用 + 知识地图 + 概念卡片 + 自测题，文末附可回看跳转的视频时间索引；v4 用于语雀直导，v4-obsidian 提供 frontmatter 与 Wiki 目录
+- **原语言术语**：英文课用中文整理，正文首次出现术语保留 **中文（Original）**，中文概念卡附原文，便于对照原课
 
 ## 🧩 工作流程
 
@@ -173,6 +174,12 @@ CPU 转写慢时可在 config.json 调整：`asr_model`（tiny~large-v3，高阶
 每次降级都会打印原因，不静默。整理完成后可让 AI 询问你是否清理缓存的媒体文件
 （`scripts/clean_media.py`，默认只列清单、`--apply` 实删）。
 
+### 笔记模板与语言
+
+`config.note_template` 指定默认模板（`v4` / `v4-obsidian`），课程也可在 `start --template` 显式选择。v4 保持无 frontmatter 的语雀直导格式；v4-obsidian 增加元信息，并用 `+ [[#精确正文标题]]` 生成目录，其它正文、概念卡、自测题和时间索引规则相同。完整规范见 [笔记模板](references/note-template.md)。
+
+B站标题明显是英文原声课（如 Lecture / MIT / Stanford / CS61A），又没有“中字 / 中英 / 配音”等提示时，Agent 会先问是否按英文转写。YouTube 默认选择原语言人工字幕 → 中文人工字幕 → 原语言自动字幕 → 原有兜底，显式 `--lang` 可覆盖默认语言优先级。结合 `audio_lang` / `subtitle_lang` 判断课程语言；英文课正文首次出现术语写 **中文（Original）**，中文概念卡加 `+ 原文：Original`，原本中文课程或纯外文专名卡名免加原文行。
+
 ## 🚀 使用
 
 安装后直接对 AI 说：
@@ -189,11 +196,26 @@ CPU 转写慢时可在 config.json 调整：`asr_model`（tiny~large-v3，高阶
 
 ```bash
 python scripts/course_plan.py plan "<B站链接>" "<课程目录>"
-python scripts/course_plan.py start "<课程目录>" --first 3
+python scripts/course_plan.py start "<课程目录>" --first 3 --template v4 --asr-lang zh
 python scripts/course_plan.py next "<课程目录>"
 ```
 
-每集写完笔记、填深链并通过门禁后，由 Agent 调用 `mark … done --note …`；失败则 `mark … failed --reason …` 后继续。`status` 查询进度，`mark … pending` 补跑。多分P默认只做当前视频；展开合集用 `--scope season`。超过 200 集或 100 小时的清单只允许选择范围，详见 [SKILL.md](SKILL.md)“整门课模式”。
+若选择 Obsidian 与英文原声，在 `start` 改用 `--template v4-obsidian --asr-lang en`；自动检测转写语言用 `--asr-lang auto`。模板未显式指定时取 `config.note_template`。
+
+每集按 `next` 返回的 `note.template`、`note_path` 和命令制作笔记；`existing_note:true` 时在原文件修正，除文件缺失外不整篇重写。转写退出码非 0 或 JSON `status:error` 都算失败。写完笔记、填深链并通过门禁后，由 Agent 调用 `mark … done --note …`，该命令还会执行进程内门禁，拒绝时按报告修正。仍失败则 `mark … failed --reason … --next-step …` 后继续下一集。
+
+续跑 `next` 会先复查已 done 的笔记；笔记 SHA 与模板未变时复用缓存、跳过检查，改坏或缺失则退回 pending、保留 `planned_note` 供修复，不会自动把草稿标成 done。`verify` 可手动复查，与 `next` 共享 SHA 缓存，不能当作强制全量检查；`index` 刷新课程索引；`status` 只读查询。`mark … pending` 可安排失败集补跑。
+
+```bash
+# 手动复查、刷新索引、只读查看进度
+python scripts/course_plan.py verify "<课程目录>"
+python scripts/course_plan.py index "<课程目录>"
+python scripts/course_plan.py status "<课程目录>"
+```
+
+`next` 返回 `status:finished` 时，Agent 原样转述 `receipt_text` 完成回执（包含课程索引与失败集补跑信息）。只有 `cache.bytes > 0` 才询问是否清理缓存，用户同意后执行 `python scripts/course_plan.py clean "<课程目录>" --apply`；为 0 时不询问。
+
+多分P默认只做当前视频；展开合集用 `--scope season`。超过 200 集或 100 小时的清单只允许选择范围，详见 [SKILL.md](SKILL.md)“整门课模式”。
 
 也可以直接手动调用脚本（详见 [SKILL.md](SKILL.md) 的工作流程章节）：
 
@@ -228,6 +250,10 @@ python scripts/note_nav.py "<笔记.md>" --template v4 --meta "<输出目录>/me
 # 生成笔记后的质量门禁（errors 为 0 才交付）
 python scripts/validate_note.py "<笔记.md>" --template v4 --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
 
+# 单视频 Obsidian 变体：深链和门禁必须使用同一模板
+python scripts/note_nav.py "<笔记.md>" --template v4-obsidian --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
+python scripts/validate_note.py "<笔记.md>" --template v4-obsidian --meta "<输出目录>/metadata.json" --txt-dir "<输出目录>"
+
 # （可选，带截图时）截图上传阿里云 OSS 并改写为 OSS 链接，便于导入语雀（默认预演，--apply 实际执行）
 python scripts/upload_images.py "<笔记.md>" --apply
 ```
@@ -238,6 +264,7 @@ python scripts/upload_images.py "<笔记.md>" --apply
 ├── SKILL.md               # Agent Skills 规范定义：触发条件、三步工作流程、笔记模板
 ├── scripts/
 │   ├── doctor.py          # 环境自检：依赖 / 模型 / 设备 / 编码 / 加密软件 / 网络风控
+│   ├── course_plan.py     # 整门课规划、续跑复查、课程索引、回执与询问式清理
 │   ├── bili_fetch.py      # B站：元数据 + 字幕抓取（--probe 只探元数据）
 │   ├── douyin_fetch.py    # 抖音：元数据 + 视频下载供转写（游客身份）
 │   ├── yt_fetch.py        # YouTube：元数据 + 字幕三级回退（无字幕按需下载音频）
@@ -253,7 +280,7 @@ python scripts/upload_images.py "<笔记.md>" --apply
 │   ├── ensure_abogus.py   # abogus.py 缺失时从上游固定 commit 下载（SHA-256 校验）
 │   └── abogus.py          # 抖音 a_bogus 签名算法（GPLv3，按需下载，不入仓库）
 ├── tests/                 # 离线 pytest 测试（不联网、无需重依赖）
-├── examples/              # 示例笔记（真实视频生成，已通过质量门禁）
+├── examples/              # 保留现有单篇样例；整门课样例结构规划见下文
 ├── docs/images/           # README 配图
 ├── references/
 │   ├── anchors.json       # 截图关键词锚点表（按视频 ID 隔离，仅在不用 --shots 清单时兜底）
@@ -264,7 +291,15 @@ python scripts/upload_images.py "<笔记.md>" --apply
 └── LICENSE                # MIT
 ```
 
+未来整门课样例可在 `examples/` 下按“课程目录 → 课程索引 + 逐集笔记”组织；具体课程、文件名和样例需另行选择并验收。此处仅说明预期结构，现有单篇样例保持不变，不表示仓库已经提供整门课样例或 I4 真实验收已通过。
+
 ## ❓ 常见问题
+
+<details>
+<summary><b>PowerShell 5.1 显示 NativeCommandError，是脚本失败了吗？</b></summary>
+
+不一定。PowerShell 5.1 可能把原生命令正常写到 stderr 的进度或警告显示为 `NativeCommandError`。请结合进程退出码（命令结束后立即查看 `$LASTEXITCODE`）和 stdout 最后一行 JSON 判断；退出码非 0 或 JSON `status:error` 都应按失败处理，不能仅凭 stderr 的红字判断。
+</details>
 
 <details>
 <summary><b>需要什么环境？</b></summary>

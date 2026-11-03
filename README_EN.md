@@ -28,13 +28,14 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 ## ✨ Features
 
 - **Four platforms**: Bilibili (`bilibili.com` / `b23.tv` short links / BV IDs), Douyin (`douyin.com` / `v.douyin.com` / `iesdouyin.com` links / share text), YouTube (`youtube.com` / `youtu.be` / Shorts, official or auto captions first) and Xiaohongshu / RedNote (`xiaohongshu.com` / `xhslink.com` video-note share links)
-- **整门课**：发一个B站分P或合集链接，先列清单、报预估并确认范围，再逐集出笔记；支持进度回报、单集失败后继续及补跑
+- **Whole courses**: plan a Bilibili multipart video or collection, review the estimate and confirm a range before processing; includes a course index, a completion receipt, resume-time note checks, and retries while continuing past failed episodes
 - **Subtitles first**: fetches official / AI subtitles from Bilibili (login optional) — instant transcripts at zero cost
 - **Local ASR fallback**: when no subtitles exist, transcribes locally with faster-whisper (CPU int8; uses the hf-mirror inside mainland China). **No paid API calls**
 - **Key-frame screenshots**: anchored on transcript timestamps and extracted with PyAV; a local quality check flags black / blank / blurry frames (white-background slides are not misjudged), and the agent makes the final visual call
 - **Douyin without login**: accesses public videos as a guest, no account cookie needed; the video is used only for local transcription and can be cleaned up afterwards
 - **Xiaohongshu without login**: parses the data embedded in the share page and downloads video notes directly — no signature, no account (video notes only; image notes and comments are not supported)
-- **Lecture-note template**: sections, bolded key terms, real code references, a mind map, concept cards, self-test questions, and a collapsible video time index with deep links back to the video
+- **Lecture-note templates**: sections, bolded key terms, real code references, a concept map, concept cards, self-test questions, and an unfolded video time index with deep links; v4 targets Yuque imports, while v4-obsidian adds frontmatter and a Wiki-link table of contents
+- **Original-language terms**: English courses produce Chinese notes with **中文（Original）** at each term's first appearance and an original-term field on Chinese concept cards
 
 ## 🧩 Workflow
 
@@ -120,6 +121,12 @@ Copy `config.example.json` to `config.json` in the same directory. `SESSDATA` (B
 
 ASR tuning: `asr_model` (tiny ~ large-v3, falls back one size automatically on failure), `asr_device` (auto / cpu / cuda, falls back to cpu), `asr_cpu_threads` (0 = auto).
 
+### Note templates and language
+
+`config.note_template` sets the default (`v4` / `v4-obsidian`); a course can explicitly select one with `start --template`. v4 keeps the frontmatter-free Yuque format. v4-obsidian adds frontmatter and uses `+ [[#Exact body heading]]` entries in the table of contents; the body, concept cards, questions and time-index rules remain the same. See the [note template](references/note-template.md) for the full specification.
+
+For Bilibili titles that clearly suggest an English-original course (Lecture / MIT / Stanford / CS61A) without Chinese-subtitle, bilingual or dubbing markers (`中字` / `中英` / `配音`), the agent asks whether to transcribe in English first. YouTube defaults to original-language manual captions → Chinese manual captions → original-language auto captions → existing fallbacks; an explicit `--lang` overrides that language priority. Use `audio_lang` / `subtitle_lang` to determine the course language. For English courses, write Chinese prose with **中文（Original）** at each term's first appearance and Chinese concept-card names with `+ 原文：Original`. Originally Chinese courses and cards named with an untranslated foreign proper name do not need that field.
+
 ## 🚀 Usage
 
 Talk to your agent:
@@ -130,15 +137,30 @@ Talk to your agent:
 >
 > Make notes from this YouTube video: https://www.youtube.com/watch?v=xxxx
 
-整门课先规划，Agent 原样展示确认文案并等待范围选择，以下示例只做前 3 集：
+For a whole course, the agent first displays the planning confirmation verbatim and waits for your range selection. This example selects only the first three episodes:
 
 ```bash
-python scripts/course_plan.py plan "<B站链接>" "<课程目录>"
-python scripts/course_plan.py start "<课程目录>" --first 3
-python scripts/course_plan.py next "<课程目录>"
+python scripts/course_plan.py plan "<Bilibili URL>" "<course root>"
+python scripts/course_plan.py start "<course root>" --first 3 --template v4 --asr-lang zh
+python scripts/course_plan.py next "<course root>"
 ```
 
-`next` 给出本集步骤；通过笔记门禁后 `mark … done --note …`，失败则 `mark … failed --reason …` 后继续。`status` 查询进度，`mark … pending` 补跑。多分P默认只做当前视频，展开合集用 `--scope season`；超过 200 集或 100 小时的清单只能选择范围。详见 [SKILL.md](SKILL.md)“整门课模式”。
+For Obsidian and English-original audio, use `--template v4-obsidian --asr-lang en` on `start`; use `--asr-lang auto` for automatic language detection. Without an explicit template, the default comes from `config.note_template`.
+
+Follow the `note.template`, `note_path` and commands returned by `next`. When `existing_note:true`, edit the original note in place; rewrite only if the file is missing. A nonzero transcription exit code or JSON `status:error` means failure. After filling deep links and passing validation, call `mark … done --note …`; it runs an in-process quality gate too. If rejected, fix the reported problems and retry. If an episode still fails, record it with `mark … failed --reason … --next-step …` and continue.
+
+On resume, `next` first rechecks done notes. An unchanged note SHA and template reuse the cache and skip validation; a broken or missing note returns to pending with `planned_note` preserved for repair. Existing drafts are never automatically marked done. `verify` requests a manual recheck and shares the SHA cache with `next`, so it is not a forced full validation. `index` refreshes the course index; `status` is read-only. Use `mark … pending` to schedule a failed episode again.
+
+```bash
+# 手动复查、刷新索引、只读查看进度
+python scripts/course_plan.py verify "<course root>"
+python scripts/course_plan.py index "<course root>"
+python scripts/course_plan.py status "<course root>"
+```
+
+When `next` returns `status:finished`, the agent relays `receipt_text` verbatim, including the course index and retry information. It asks about cache cleanup only when `cache.bytes > 0`, then runs `python scripts/course_plan.py clean "<course root>" --apply` only after your consent. With zero cache bytes, no cleanup question is needed.
+
+Multipart videos default to the current video; expand a collection with `--scope season`. Lists over 200 episodes or 100 hours require a limited selection. See the whole-course workflow in [SKILL.md](SKILL.md).
 
 Or run the scripts by hand (see [SKILL.md](SKILL.md) for details):
 
@@ -151,9 +173,33 @@ python scripts/xhs_fetch.py "<share link or text>" "<outdir>"  # Xiaohongshu: me
 python scripts/bili_transcribe.py "<outdir>/metadata.json"  # local ASR when no subtitles
 python scripts/note_nav.py "<note.md>" --template v4 --meta "<outdir>/metadata.json" --txt-dir "<outdir>"       # fill deep links
 python scripts/validate_note.py "<note.md>" --template v4 --meta "<outdir>/metadata.json" --txt-dir "<outdir>"  # quality gate
+# 单视频 Obsidian 变体：深链和门禁使用同一模板
+python scripts/note_nav.py "<note.md>" --template v4-obsidian --meta "<outdir>/metadata.json" --txt-dir "<outdir>"
+python scripts/validate_note.py "<note.md>" --template v4-obsidian --meta "<outdir>/metadata.json" --txt-dir "<outdir>"
 ```
 
+## Directory layout
+
+```text
+├── SKILL.md               # 技能流程与生成规则
+├── scripts/               # 抓取、转写、截图、门禁与课程命令
+│   └── course_plan.py     # 课程规划、续跑复查、索引、回执与清理
+├── references/            # 模板与术语参考
+│   └── note-template.md   # v4 / v4-obsidian 规范
+├── examples/              # 保留现有单篇样例；未来整门课结构见下文
+├── docs/images/           # README 配图
+└── tests/                 # 离线测试
+```
+
+Future whole-course examples can be organized under `examples/` as a course directory containing a course index and per-episode notes. The course, filenames and examples still need to be selected and validated. This is a proposed layout, not a claim that a whole-course example is already available or that I4 real-world acceptance has passed. Existing single-note examples remain unchanged.
+
 ## ❓ FAQ
+
+<details>
+<summary><b>Does PowerShell 5.1 NativeCommandError mean the script failed?</b></summary>
+
+Not necessarily. PowerShell 5.1 may display normal native-command stderr progress or warnings as `NativeCommandError`. Check the process exit code (`$LASTEXITCODE` immediately after the command) and the last stdout JSON line. A nonzero exit code or JSON `status:error` means failure; red stderr output alone does not.
+</details>
 
 <details>
 <summary><b>What do I need?</b></summary>
@@ -201,7 +247,7 @@ The default `small` model runs at about 0.2× the video length on a 6-core lapto
 <details>
 <summary><b>Does it work for English videos?</b></summary>
 
-Yes — faster-whisper is multilingual. Note that the note template and examples are written in Chinese, so ask your agent explicitly if you want the notes in English.
+Yes — faster-whisper is multilingual. For English-original courses, choose `--asr-lang en` at course start (`zh` for Chinese, `auto` for detection). The default notes use Chinese prose with bilingual first-use terms and original-term fields on Chinese concept cards, as described above. Ask your agent explicitly if you want the notes themselves in English.
 </details>
 
 ## 📜 Usage Notice & Data Flow
