@@ -321,6 +321,44 @@ def test_duplicate_lecture_names_are_disambiguated_by_global_index(course):  # �
     assert second.name == "002-2.13-业务流程建模.md" and first != second  # 全局索引保证稳定且不会覆盖
 
 
+def test_running_note_path_stays_stable_after_partial_file_written(course):  # 写笔记中断后仍交出原路径
+    root = course()  # 初始化课程执行
+    first = Path(step_of(cp.course_next(root), "note")["note_path"])  # 第一次分配输出位置
+    first.write_text("尚未写完的内容", encoding="utf-8")  # 模拟写到一半中断
+    second = Path(step_of(cp.course_next(root), "note")["note_path"])  # 同一运行中任务重新交接
+    assert second == first  # 防覆盖逻辑不得把本集自己的草稿当成他人文件
+
+
+def test_note_candidate_does_not_overwrite_saved_path_after_reindex(course):  # 模拟模式切换后旧完成集序号改变
+    root = course()  # 初始当前视频课程
+    data = read_course(root)  # 旧集已完成但现在被重新编号为第二集
+    data["items"][0]["title"] = "入门"  # 新集候选路径会使用原序号
+    data["items"][1].update(title="入门", status="done", note="notes/001-入门.md")  # 已完成集仍保留原路径
+    saved = make_note(root, "notes/001-入门.md")  # 模拟真实已完成文件
+    before = saved.read_bytes()  # 保存内容用于验证未被覆盖
+    write_course(root, data)  # 当前索引候选名不同但已存路径冲突
+    candidate = Path(step_of(cp.course_next(root), "note")["note_path"])  # 请求新集的笔记路径
+    assert candidate != saved and saved.read_bytes() == before  # 新集不能写入另一集的已完成产物
+
+
+def test_orphan_marker_allows_real_transcribe_entry_to_recover(course, monkeypatch, capsys):  # 验证交出命令能恢复而非仅检查skip字段
+    import bili_transcribe as bt  # 不加载实际模型的入口模块
+    root = course()  # 初始化真实临时课程
+    metadata, _, text = cache_metadata(root)  # 写入匹配的缓存身份
+    marker = text.with_name(text.name + ".done")  # 旧完成标记仍在但正文已经缺失
+    marker.write_text("{}", encoding="utf-8")  # 模拟孤立完成标记
+    result = cp.course_next(root)  # 编排时修复失效标记
+    assert step_of(result, "transcribe")["skip"] is False  # 本集需要真实转写
+    monkeypatch.setattr(bt, "load_sessdata", lambda: "")  # 不读真实配置
+    monkeypatch.setattr(bt, "_cfg", lambda key, default=None: default)  # 使用默认模型与设备
+    monkeypatch.setattr(bt, "download_audio", lambda bvid, cid, path, cookie: path.write_bytes(b"audio"))  # 音频下载离线替换
+    monkeypatch.setattr(bt, "transcribe", lambda *args, **kwargs: "[00:01] 恢复的正式转写稿")  # 不调用模型或网络
+    monkeypatch.setattr(sys, "argv", ["bili_transcribe.py", str(metadata), "--page", "1"])  # 使用交出步骤相同参数
+    bt.main()  # 运行真实转写入口及完成判据
+    assert text.is_file() and "恢复" in text.read_text(encoding="utf-8")  # 不得被孤立标记误判为nothing_to_do
+    assert list(marker.parent.glob(marker.name + ".orphan-*"))  # 原标记保留为可追溯备份
+
+
 def test_cli_next_and_mark_emit_json_and_single_stderr_progress(course, capsys):  # 标准输出仅机器摘要且用户进度保持单行
     root = course()  # 先完成不会打印进度的规划和确认
     data = read_course(root)  # 在外部标题注入换行测试显示清洗

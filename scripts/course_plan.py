@@ -354,8 +354,8 @@ def command_text(argv):  # 展示命令始终给参数加引号
 
 
 def _note_path(root, course, item):  # 默认按讲义编号命名并对重复标题消歧
-    if item.get("note"):  # 补跑时保留已有笔记位置
-        return root / item["note"]  # 已保存路径相对课程目录
+    if item.get("note") or item.get("planned_note"):  # 补跑和中断恢复均保留已分配位置
+        return root / (item.get("note") or item["planned_note"])  # 正式路径与草稿路径都相对课程目录
     def filename(entry):  # 统一生成候选文件名
         title = bili_fetch.safe_name(entry["title"])  # 先清洗视频标题中的非法字符
         match = re.match(r"^(\d+\.\d+)(?:[\s.、_\-]+|$)(.*)", title)  # 识别章节式编号
@@ -365,7 +365,13 @@ def _note_path(root, course, item):  # 默认按讲义编号命名并对重复�
     collisions = [entry for entry in course["items"] if filename(entry).casefold() == name.casefold()]  # Windows 同名比较不区分大小写
     if len(collisions) > 1:  # 合集中不同视频可能拥有相同讲义编号
         name = f'{item["index"]:03d}-{name}'  # 用全局序号避免相互覆盖
-    return root / "notes" / name  # 产物统一放在课程目录中
+    reserved = {(root / path).resolve().as_posix().casefold() for entry in course.get("history", []) + course["items"] if _key(entry) != _key(item) for path in (entry.get("note"), entry.get("planned_note")) if path}  # 历史完成路径和已分配草稿都不能被其它集占用
+    candidate = root / "notes" / name  # 先尝试标准候选名称
+    serial = 0  # 文件已存在或被历史记录占用时稳定增加后缀
+    while candidate.resolve().as_posix().casefold() in reserved or candidate.exists():  # 不覆盖未知文件或其它集的已完成笔记
+        serial += 1  # 同时处理多次清洗或重新编号造成的重复
+        candidate = root / "notes" / f'{Path(name).stem}-{item["index"]:03d}-{serial}.md'  # 保留方案要求的前导编号与主题
+    return candidate  # 只有确认没有占用的路径才交给 Agent
 
 
 def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
@@ -393,6 +399,10 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
             if meta.get("bvid") != item["bvid"] or page is None:  # 阻止过期或错配元数据
                 raise ValueError("BV号或目标分P与课程清单不一致")  # 由三段提示报告原因
             text = folder / f'{page["page"]:02d}_{bili_fetch.safe_name(page["part"])}.txt'  # 只使用目标正式字幕文件
+            if not text.exists():  # 原转写工具仅凭标记存在就会跳过，先隔离失效标记
+                marker = text.with_name(text.name + ".done")  # 只检查本集对应的完成标记
+                if marker.is_file():  # 不删除用户文件，保留异常状态的证据
+                    marker.rename(marker.with_name(marker.name + f".orphan-{time.time_ns()}"))  # 改为不被转写工具识别的唯一备份名称
             if text.is_file():  # 孤立完成标记不能让文本缺失的集被跳过
                 from bili_transcribe import txt_done  # 不加载 faster-whisper 等重型依赖
                 completed = page.get("subtitle_detail") in ("cc", "ai") or txt_done(folder, page)  # 兼容旧转写稿并复用原判据
@@ -403,6 +413,9 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
         note.parent.mkdir(parents=True, exist_ok=True)  # 支持新课程及多级目录
     except OSError as exc:  # 写权限失败使用统一提示
         raise HintError("无法创建笔记目录", "这一集尚未开始写笔记", "检查目录权限后重试 next", str(exc)) from None  # 不产生误完成状态
+    if not item.get("planned_note"):  # 一旦分配便持久保留，写到一半也不会漂移
+        item["planned_note"] = note.relative_to(root).as_posix()  # 独立于正式完成结果，pending可重用自己的草稿
+        save_course(root, course)  # 恢复时不把自己的文件当成陌生文件
     fetch = script_argv("bili_fetch.py", item["bvid"], folder)  # 抓取命令只针对当前 BV
     transcribe = script_argv("bili_transcribe.py", metadata, "--page", item["page"])  # ASR 一次只处理这一集
     common = [note, "--meta", metadata, "--txt-dir", folder, "--page", item["page"], "--template", "v4"]  # 导航与门禁使用同一页码
