@@ -17,7 +17,7 @@
 </div>
 
 > 💬 对 AI 说一句「帮我把这个视频做成课堂笔记：<B站/抖音/YouTube/小红书链接>」，就能得到下面这样的笔记 👇
-> （完整示例：[李宏毅机器学习 · 局部最小值与鞍点](examples/01-局部最小值与鞍点.md)）
+> （完整示例：[李宏毅机器学习 · 局部最小值与鞍点](examples/01-局部最小值与鞍点.md)；课程节选：[可汗微观经济学 · 前15集](examples/可汗微观经济学-前15集/课程索引.md)）
 
 <p align="center"><img src="docs/images/note-preview.png" alt="课堂笔记效果预览" width="760"></p>
 
@@ -280,7 +280,7 @@ python scripts/upload_images.py "<笔记.md>" --apply
 │   ├── ensure_abogus.py   # abogus.py 缺失时从上游固定 commit 下载（SHA-256 校验）
 │   └── abogus.py          # 抖音 a_bogus 签名算法（GPLv3，按需下载，不入仓库）
 ├── tests/                 # 离线 pytest 测试（不联网、无需重依赖）
-├── examples/              # 保留现有单篇样例；整门课样例结构规划见下文
+├── examples/              # 单篇样例与可汗微观经济学前15集节选
 ├── docs/images/           # README 配图
 ├── references/
 │   ├── anchors.json       # 截图关键词锚点表（按视频 ID 隔离，仅在不用 --shots 清单时兜底）
@@ -291,7 +291,7 @@ python scripts/upload_images.py "<笔记.md>" --apply
 └── LICENSE                # MIT
 ```
 
-未来整门课样例可在 `examples/` 下按“课程目录 → 课程索引 + 逐集笔记”组织；具体课程、文件名和样例需另行选择并验收。此处仅说明预期结构，现有单篇样例保持不变，不表示仓库已经提供整门课样例或 I4 真实验收已通过。
+[可汗微观经济学前15集节选](examples/可汗微观经济学-前15集/课程索引.md)按“课程目录 → 课程索引 + 逐集笔记”组织，包含15篇中文笔记，覆盖原课前1小时59分1秒；[来源与许可说明](examples/可汗微观经济学-前15集/README.md)单独列出。用户将本次范围缩减为前15集，因此这是课程节选，不是71集整课样例；[I4验收记录](docs/verification/I4-课程版.md)列出了已验证结果及尚未完成的界面抽查。
 
 ## ❓ 常见问题
 

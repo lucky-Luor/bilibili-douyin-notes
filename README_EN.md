@@ -17,7 +17,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 </div>
 
 > 💬 Just tell your AI agent "make lecture notes from this video: <Bilibili / Douyin / YouTube / Xiaohongshu link>" and you get notes like this 👇
-> (Full example: [Hung-yi Lee ML course · Local Minima & Saddle Points](examples/01-局部最小值与鞍点.md), in Chinese)
+> (Examples in Chinese: [Hung-yi Lee ML course · Local Minima & Saddle Points](examples/01-局部最小值与鞍点.md); [Khan microeconomics · first 15 lessons](examples/可汗微观经济学-前15集/课程索引.md))
 
 <p align="center"><img src="docs/images/note-preview.png" alt="Note preview" width="760"></p>
 
@@ -186,12 +186,12 @@ python scripts/validate_note.py "<note.md>" --template v4-obsidian --meta "<outd
 │   └── course_plan.py     # 课程规划、续跑复查、索引、回执与清理
 ├── references/            # 模板与术语参考
 │   └── note-template.md   # v4 / v4-obsidian 规范
-├── examples/              # 保留现有单篇样例；未来整门课结构见下文
+├── examples/              # 单篇样例与微观经济学前15集节选
 ├── docs/images/           # README 配图
 └── tests/                 # 离线测试
 ```
 
-Future whole-course examples can be organized under `examples/` as a course directory containing a course index and per-episode notes. The course, filenames and examples still need to be selected and validated. This is a proposed layout, not a claim that a whole-course example is already available or that I4 real-world acceptance has passed. Existing single-note examples remain unchanged.
+The [first 15 Khan microeconomics lessons](examples/可汗微观经济学-前15集/课程索引.md) provide a course index and 15 Chinese notes covering 1 hour, 59 minutes and 1 second of source video. See the [source and licensing notes](examples/可汗微观经济学-前15集/README.md). The user limited this run to the first 15 lessons; this is an excerpt, not the full 71-part course. The [I4 verification record](docs/verification/I4-课程版.md) distinguishes verified results from incomplete desktop checks.
 
 ## ❓ FAQ
 

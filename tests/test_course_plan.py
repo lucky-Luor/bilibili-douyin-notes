@@ -271,9 +271,9 @@ def test_estimate_components_are_exact(capsys, offline, tmp_path):  # 用固定�
     estimate = read_course(tmp_path)["estimate"]  # 持久化完整估算便于后续状态使用
     assert estimate["items"] == 4 and estimate["hours"] == 0.5  # 数量与课程小时数精确
     assert estimate["asr_items"] == 4 and estimate["asr_seconds"] == 360  # 语音识别按视频时长两成计算
-    assert estimate["note_seconds"] == 360 and estimate["fetch_seconds"] == 20  # 笔记每集九十秒及抓取每集五秒
-    assert estimate["total_seconds"] == 740  # 总耗时必须由各分量相加
-    assert result["estimate_minutes"] == pytest.approx(740 / 60, abs=0.1)  # 输出分钟数保持相同口径
+    assert estimate["note_seconds"] == 240 and estimate["fetch_seconds"] == 20  # 十五集实测校准笔记每集六十秒且抓取仍每集五秒
+    assert estimate["total_seconds"] == 620  # 总耗时必须由各分量相加
+    assert result["estimate_minutes"] == pytest.approx(620 / 60, abs=0.1)  # 输出分钟数保持相同口径
 
 
 def test_mixed_subtitles_exclude_available_asr(capsys, offline, tmp_path):  # 只有可用字幕能免除语音识别估算
@@ -282,7 +282,7 @@ def test_mixed_subtitles_exclude_available_asr(capsys, offline, tmp_path):  # �
     invoke(capsys, "plan", data["bvid"], tmp_path)  # 执行混合字幕课程规划
     estimate = read_course(tmp_path)["estimate"]  # 查看精确耗时分量
     assert estimate["asr_items"] == 3 and estimate["asr_seconds"] == 240  # 无法用的字幕轨仍按语音识别估算
-    assert estimate["total_seconds"] == 620  # 总耗时扣除首集的语音识别成本
+    assert estimate["total_seconds"] == 500  # 每集六十秒整理时间并扣除首集的语音识别成本
 
 
 def test_confirm_text_uses_hour_for_long_estimate(capsys, offline, tmp_path):  # 长课程确认文案不应只显示大分钟数
@@ -390,7 +390,7 @@ def test_status_is_readonly_and_reports_failures(capsys, offline, tmp_path):  # 
     assert result["counts"]["done"] == 1 and result["counts"]["failed"] == 1  # 失败与完成必须分别统计
     assert len(result["items"]) == 4 and len(result["failed_items"]) == 1  # 完整条目列表与失败详情准确
     assert "模拟转写失败" in json.dumps(result["failed_items"], ensure_ascii=False)  # 失败详情需保留可读原因
-    assert result["remaining_seconds"] == 330  # 无有效耗时样本时仅对待处理两集使用完整公式
+    assert result["remaining_seconds"] == 270  # 无有效耗时样本时两集各计六十秒整理并使用完整公式
 
 
 def test_start_pending_excludes_completed(capsys, offline, tmp_path):  # 已完成结果不应该再次列入待处理
@@ -398,7 +398,7 @@ def test_start_pending_excludes_completed(capsys, offline, tmp_path):  # 已完�
     mark_results(tmp_path)  # 将首集标记完成第二集标记失败
     result, _ = invoke(capsys, "start", tmp_path, "--all")  # 重试剩余任务
     assert result["pending"] == 2 and result["items_in_scope"] == 4  # 已完成与失败均不属于本轮待处理
-    assert result["estimate_minutes"] == pytest.approx(740 / 60, abs=0.1) and result["remaining_seconds"] == 330  # 范围整体估算与仅待做的剩余耗时独立
+    assert result["estimate_minutes"] == pytest.approx(620 / 60, abs=0.1) and result["remaining_seconds"] == 270  # 校准后范围整体估算与仅待做剩余耗时独立
 
 
 def test_chinese_json_is_utf8_and_write_is_atomic(capsys, offline, tmp_path, monkeypatch):  # 中文持久化与原子替换都必须得到验证

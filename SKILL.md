@@ -62,7 +62,7 @@ python "<skill安装目录>/scripts/course_plan.py" plan "<链接>" "<课程目�
 7. 每次 `mark` 把摘要的 `progress` 原样转告用户。`next` 返回 `status:finished` 时，把 `receipt_text` **原样转述**，保留其中的完成数、失败集、课程索引和补跑信息，不自行编造回执。仅当 `cache.bytes > 0` 时询问是否清理缓存；用户同意后才执行 `python "<skill安装目录>/scripts/course_plan.py" clean "<课程目录>" --apply`，`cache.bytes = 0` 时不询问。
 8. 中途被打断时再次 `next` 会先复查已 done 的集，再交出待处理集（含原来的 running 集）。笔记 SHA 与模板未变化时复用缓存、跳过检查；笔记改坏或缺失时退回 pending，保留 `planned_note` 供原位修复。已有草稿不会自动成为 done。需要手动复查时用 `verify "<课程目录>"`，它与 `next` 共享 SHA 校验缓存，并非强制全量检查；`index "<课程目录>"` 刷新课程索引，`status "<课程目录>"` 只读查询、不触发复查。`mark "<课程目录>" <序号> pending` 可把失败集放回待处理，再调用 `next`。`plan` 刷新同源同模式清单会保留结果；切换模式用 `start --scope`。不要把转写 `.done` 与课程笔记的 done 状态混为一谈。
 
-课程目录中的 `course.json` 是唯一状态来源；`videos/<BV号>/` 复用单视频抓取产物，同 BV 只抓取一次，`notes/` 每集一篇。默认最多探测 60 集字幕、间隔 0.3 秒；`plan --probe-all` 全探，`--no-probe` 跳过，未探测或失败按需要 ASR 保守估算。预估按六核笔记本 CPU，后续剩余时间使用已完成集的有效平均耗时修正。
+课程目录中的 `course.json` 是唯一状态来源；`videos/<BV号>/` 复用单视频抓取产物，同 BV 只抓取一次，`notes/` 每集一篇。默认最多探测 60 集字幕、间隔 0.3 秒；`plan --probe-all` 全探，`--no-probe` 跳过，未探测或失败按需要 ASR 保守估算。预估按六核笔记本 CPU，ASR 初值为视频时长的 0.2 倍；笔记整理初值按 I4 前15集样本的差值中位数校准为每集60秒（不含ASR，长课与不同机器可能偏离）。后续剩余时间使用已完成集的有效平均耗时修正。
 
 ### 第一步：抓取元数据 + 字幕（B站 / YouTube）或下载视频（抖音 / 小红书）
 
