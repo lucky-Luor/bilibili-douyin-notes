@@ -29,6 +29,7 @@
 
 - **多平台支持**：B站（`bilibili.com` / `b23.tv` 短链 / BV号）、抖音（`douyin.com` / `v.douyin.com` / `iesdouyin.com` 链接 / 分享口令文本）、YouTube（`youtube.com` / `youtu.be` / Shorts 链接，优先取官方/自动字幕）与小红书（`xiaohongshu.com` / `xhslink.com` 视频笔记分享链接）
 - **整门课**：发一个B站分P或合集链接，先列清单、报预估并确认范围，再逐集出笔记；支持课程索引、完成回执、续跑门禁复查、单集失败后继续及补跑
+- **课程概念表与课程自测**：跨集汇总已有概念与题目，可勾选已掌握、保留勾选并回看原课；对 Agent 说“考考我”，一次一题复习，无需重新提供视频URL
 - **字幕优先**：自动抓取B站官方/AI字幕（可选登录），零成本秒出文稿
 - **ASR 兜底**：无字幕时用 faster-whisper 本地语音识别（CPU int8，国内走 hf-mirror 镜像），**不调任何付费 API**
 - **重点截图**：按转写稿时间戳锚点 + PyAV 抽帧，本地画质初筛自动**校验并标记**黑屏/空屏/模糊帧（像素占比法，白底 PPT 不误判），最终由 Agent 视觉复核决定取舍；无硬编码锚点时自动从文稿提取关键词
@@ -213,9 +214,29 @@ python scripts/course_plan.py index "<课程目录>"
 python scripts/course_plan.py status "<课程目录>"
 ```
 
-`next` 返回 `status:finished` 时，Agent 原样转述 `receipt_text` 完成回执（包含课程索引与失败集补跑信息）。只有 `cache.bytes > 0` 才询问是否清理缓存，用户同意后执行 `python scripts/course_plan.py clean "<课程目录>" --apply`；为 0 时不询问。
+`next` 返回 `status:finished` 时，Agent 原样转述 `receipt_text` 完成回执（包含课程索引、概念表、课程自测与失败集补跑信息）。只有 `cache.bytes > 0` 才询问是否清理缓存，用户同意后执行 `python scripts/course_plan.py clean "<课程目录>" --apply`；为 0 时不询问。
 
 多分P默认只做当前视频；展开合集用 `--scope season`。超过 200 集或 100 小时的清单只允许选择范围，详见 [SKILL.md](SKILL.md)“整门课模式”。
+
+### 课程复习
+
+课程模型与 CLI 已在本地实现可用。已有课程至少完成一集后，在项目根目录执行；复习不新增依赖，只读取原笔记，兼容已有 `course.json`。
+
+本地完整离线测试与 UTF-8 模式均为 849 项通过、5 项跳过；15 集程序验收通过。40 篇离线性能用例耗时约 0.09 秒；40 集未实测，按用户决定以 15 集验收。详细结果与待完成项目见 [I5 验收记录](docs/verification/I5-概念表.md)。
+
+```bash
+python scripts/course_plan.py concepts "<课程目录>" # 生成或刷新概念表.md、课程自测.md
+python scripts/course_plan.py concepts "<课程目录>" --unmastered # 只读列出没掌握的概念与对应题目
+python scripts/course_plan.py concepts "<课程目录>" --master "机会成本" # 标记已掌握并刷新，可重复传入名称
+python scripts/course_plan.py concepts "<课程目录>" --unmaster "机会成本" # 取消掌握标记并刷新
+python scripts/course_plan.py concepts "<课程目录>" --check # 只检查、不写文件，有错误时退出码为1
+```
+
+`--check`、`--unmastered`、`--master/--unmaster` 三组互斥。汇总包含所有已完成且有笔记路径的集，不受当前所选范围限制。课程索引和完成回执提供两个复习文件的入口；`mark`、`verify`、`next` 结束及 `index` 会顺带刷新，失败时返回 `review_warning`。
+
+在 `概念表.md` 把 `+ [ ]` 改为 `+ [x]` 即标记已掌握，重新生成保留勾选，`course.json` 保存备份；文件读不出时拒绝覆盖。`课程自测.md` 答案不折叠，手动自测先遮住答案；至少勾选一个概念并刷新后，没掌握的题会单列在最前，全部题目仍保留。
+
+对 Agent 说“考考我这门课”或“我哪些没掌握”，上下文中给出课程目录即可，无需视频URL。Agent 先用 `--unmastered`，一次只出一道已有题，先不泄露答案；答后对照原答案说明对错，附回看和笔记链接，无时间点时只给笔记。答对或说“这个我会了”后，仍须征得同意才标记掌握。详见 [复习版内测说明](docs/dev/复习版内测.md)。
 
 也可以直接手动调用脚本（详见 [SKILL.md](SKILL.md) 的工作流程章节）：
 
@@ -291,7 +312,7 @@ python scripts/upload_images.py "<笔记.md>" --apply
 └── LICENSE                # MIT
 ```
 
-[可汗微观经济学前15集节选](examples/可汗微观经济学-前15集/课程索引.md)按“课程目录 → 课程索引 + 逐集笔记”组织，包含15篇中文笔记，覆盖原课前1小时59分1秒；[来源与许可说明](examples/可汗微观经济学-前15集/README.md)单独列出。用户将本次范围缩减为前15集，因此这是课程节选，不是71集整课样例；[I4验收记录](docs/verification/I4-课程版.md)列出了已验证结果及尚未完成的界面抽查。
+[可汗微观经济学前15集节选](examples/可汗微观经济学-前15集/课程索引.md)按“课程目录 → 课程索引 + 逐集笔记”组织，包含15篇中文笔记，覆盖原课前1小时59分1秒；[来源与许可说明](examples/可汗微观经济学-前15集/README.md)单独列出。复习入口：[概念表](examples/可汗微观经济学-前15集/概念表.md)（跨集概念、掌握勾选与回看）和 [课程自测](examples/可汗微观经济学-前15集/课程自测.md)（已有题目、答案与回看）。用户将本次范围缩减为前15集，因此这是课程节选，不是71集整课样例；[I4验收记录](docs/verification/I4-课程版.md)列出了已验证结果及尚未完成的界面抽查。
 
 ## ❓ 常见问题
 

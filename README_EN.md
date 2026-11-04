@@ -29,6 +29,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 
 - **Four platforms**: Bilibili (`bilibili.com` / `b23.tv` short links / BV IDs), Douyin (`douyin.com` / `v.douyin.com` / `iesdouyin.com` links / share text), YouTube (`youtube.com` / `youtu.be` / Shorts, official or auto captions first) and Xiaohongshu / RedNote (`xiaohongshu.com` / `xhslink.com` video-note share links)
 - **Whole courses**: plan a Bilibili multipart video or collection, review the estimate and confirm a range before processing; includes a course index, a completion receipt, resume-time note checks, and retries while continuing past failed episodes
+- **Course concept table and self-test**: aggregate existing concepts and questions across episodes, tick mastered concepts, preserve ticks on regeneration, and jump back to the source; ask the agent to quiz you one question at a time without supplying another video URL
 - **Subtitles first**: fetches official / AI subtitles from Bilibili (login optional) — instant transcripts at zero cost
 - **Local ASR fallback**: when no subtitles exist, transcribes locally with faster-whisper (CPU int8; uses the hf-mirror inside mainland China). **No paid API calls**
 - **Key-frame screenshots**: anchored on transcript timestamps and extracted with PyAV; a local quality check flags black / blank / blurry frames (white-background slides are not misjudged), and the agent makes the final visual call
@@ -158,9 +159,29 @@ python scripts/course_plan.py index "<course root>"
 python scripts/course_plan.py status "<course root>"
 ```
 
-When `next` returns `status:finished`, the agent relays `receipt_text` verbatim, including the course index and retry information. It asks about cache cleanup only when `cache.bytes > 0`, then runs `python scripts/course_plan.py clean "<course root>" --apply` only after your consent. With zero cache bytes, no cleanup question is needed.
+When `next` returns `status:finished`, the agent relays `receipt_text` verbatim, including the course index, concept table, course self-test and retry information. It asks about cache cleanup only when `cache.bytes > 0`, then runs `python scripts/course_plan.py clean "<course root>" --apply` only after your consent. With zero cache bytes, no cleanup question is needed.
 
 Multipart videos default to the current video; expand a collection with `--scope season`. Lists over 200 episodes or 100 hours require a limited selection. See the whole-course workflow in [SKILL.md](SKILL.md).
+
+### Course review
+
+The course model and CLI are implemented and available locally. Run the commands from the project root after at least one episode is done. Review reads existing notes, adds no dependencies, and accepts existing `course.json` files.
+
+The full offline suite and UTF-8 run each passed 849 tests with 5 skipped. Programmatic acceptance passed on 15 real lessons. The synthetic 40-note performance case took about 0.09 seconds; 40 real lessons were not tested, following the user's decision to accept 15. See the [I5 verification record](docs/verification/I5-概念表.md) for results and outstanding checks.
+
+```bash
+python scripts/course_plan.py concepts "<course root>" # 生成或刷新概念表.md、课程自测.md
+python scripts/course_plan.py concepts "<course root>" --unmastered # 只读列出没掌握的概念与对应题目
+python scripts/course_plan.py concepts "<course root>" --master "机会成本" # 标记已掌握并刷新，可重复传入名称
+python scripts/course_plan.py concepts "<course root>" --unmaster "机会成本" # 取消掌握标记并刷新
+python scripts/course_plan.py concepts "<course root>" --check # 只检查、不写文件，有错误时退出码为1
+```
+
+The three groups `--check`, `--unmastered`, and `--master/--unmaster` are mutually exclusive. Aggregation includes all done episodes with note paths, regardless of the current selection. The course index and completion receipt link to both review files. `mark`, `verify`, completion of `next`, and `index` also refresh them; a failed refresh returns `review_warning`.
+
+Change `+ [ ]` to `+ [x]` in `概念表.md` to mark a concept as mastered. Regeneration preserves these ticks and backs them up in `course.json`; an unreadable concept table is not overwritten. Answers in `课程自测.md` are unfolded, so cover them for a manual test. After at least one concept is ticked and the files are refreshed, questions for unmastered concepts appear first; all questions remain available below.
+
+Ask the agent to “quiz me on this course” or “show what I haven't mastered,” with the course directory in context; no video URL is required. It reads `--unmastered`, asks one existing question at a time without revealing the answer, then checks your response against the original answer and adds replay and note links. Without a timestamp, it gives the note link only. A correct response or “I know this” still requires your consent before marking mastery. See the [beta guide in Chinese](docs/dev/复习版内测.md).
 
 Or run the scripts by hand (see [SKILL.md](SKILL.md) for details):
 
@@ -191,7 +212,7 @@ python scripts/validate_note.py "<note.md>" --template v4-obsidian --meta "<outd
 └── tests/                 # 离线测试
 ```
 
-The [first 15 Khan microeconomics lessons](examples/可汗微观经济学-前15集/课程索引.md) provide a course index and 15 Chinese notes covering 1 hour, 59 minutes and 1 second of source video. See the [source and licensing notes](examples/可汗微观经济学-前15集/README.md). The user limited this run to the first 15 lessons; this is an excerpt, not the full 71-part course. The [I4 verification record](docs/verification/I4-课程版.md) distinguishes verified results from incomplete desktop checks.
+The [first 15 Khan microeconomics lessons](examples/可汗微观经济学-前15集/课程索引.md) provide a course index and 15 Chinese notes covering 1 hour, 59 minutes and 1 second of source video. See the [source and licensing notes](examples/可汗微观经济学-前15集/README.md). Review links: [concept table](examples/可汗微观经济学-前15集/概念表.md) (cross-episode concepts, mastery ticks and replay links) and [course self-test](examples/可汗微观经济学-前15集/课程自测.md) (existing questions, answers and replay links). The user limited this run to the first 15 lessons; this is an excerpt, not the full 71-part course. The [I4 verification record](docs/verification/I4-课程版.md) distinguishes verified results from incomplete desktop checks.
 
 ## ❓ FAQ
 
