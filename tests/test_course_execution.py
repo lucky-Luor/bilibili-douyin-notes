@@ -455,7 +455,9 @@ def test_remaining_time_reestimates_from_successful_actual_mean(course, monkeypa
     assert cp.status(root)["remaining_seconds"] == pytest.approx(50)  # 只读状态与回报估算采用同一口径
 
 
-def test_finished_and_status_preserve_failures_without_retry(course):  # 本轮结束后仍能完整定位所有失败集
+def test_finished_and_status_preserve_failures_without_retry(course, monkeypatch):  # 本轮结束后仍能完整定位所有失败集
+    clock = iter((BASE_TIME + timedelta(seconds=index)).isoformat() for index in range(100))  # 每次生成时间至少前进一秒以稳定覆盖跨秒刷新
+    monkeypatch.setattr(cp.course_review, "_review_now", lambda: next(clock))  # 固定递增复习时间避免同秒通过掩盖旧断言问题
     root = course()  # 完整四集范围
     note = make_note(root)  # 用于成功条目的真实产物
     for index in range(1, 5):  # 按执行协议逐集回报
@@ -465,14 +467,18 @@ def test_finished_and_status_preserve_failures_without_retry(course):  # 本轮�
             assert result["failed"] == index // 2  # 失败数只在真实失败回报后增加
         else:  # 其余两集正常完成
             cp.mark(root, index, "done", note=str(note))  # 完成数应独立累计
-    before = (root / "course.json").read_bytes()  # 结束查询不得重写状态
+    before = read_course(root)  # 结束自动刷新允许更新复习摘要但不得改变课程执行状态
     finished = cp.course_next(root)  # 新结束回执额外提供索引及失败补跑文案
     assert {key: finished[key] for key in ("status", "done", "failed", "failed_items", "reopened")} == {"status": "finished", "done": 2, "failed": 2, "failed_items": [2, 4], "reopened": []}  # 无待办时仍用序号列表回报失败及恢复项
     status = cp.status(root)  # 状态命令另外提供完整失败记录
     assert status["counts"]["done"] == status["counts"]["failed"] == 2  # 状态摘要与结束回执一致
     assert [item["index"] for item in status["failed_items"]] == [2, 4]  # 失败详情保持课程顺序
     assert all(item["reason"] and item["next_step"] and "pending" in item["rerun"] for item in status["failed_items"])  # 每个失败都保留可操作的恢复信息
-    assert (root / "course.json").read_bytes() == before  # 结束及状态查询保持只读
+    after = read_course(root)  # 复习生成时间跨秒变化也不影响执行结果校验
+    assert {key: value for key, value in after.items() if key not in ("review", "mastery")} == {key: value for key, value in before.items() if key not in ("review", "mastery")}  # 完成刷新只允许变动复习摘要和掌握备份
+    snapshot = (root / "course.json").read_bytes()  # 只读状态命令仍须保持清单字节不变
+    cp.status(root)  # 单独验证状态查询不会保存清单
+    assert (root / "course.json").read_bytes() == snapshot  # 保留原有状态查询严格只读保证
 
 
 def test_mark_failed_preserves_explicit_recovery_instructions(course):  # 调用者提供恢复方法时不得被默认补跑覆盖
