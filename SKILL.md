@@ -1,15 +1,16 @@
 ---
 name: bilibili-douyin-notes
-description: 把B站/抖音/YouTube/小红书视频整理成Markdown课堂笔记。用户发来 bilibili.com、b23.tv、douyin.com、youtube.com、youtu.be、xiaohongshu.com、xhslink.com 等视频链接（或分享口令）并要求做笔记、总结、转文字时使用。产出符合模板规范、经质量门禁校验的课堂笔记 .md 文件。
+description: 把B站/抖音/YouTube/小红书视频整理成Markdown课堂笔记，并支持已有课程复习。用户发来视频链接或分享口令要求做笔记、总结、转文字，或针对已有课程说“考考我 / 复习这门课 / 我哪些没掌握”时使用；复习不需要视频URL。产出经质量门禁校验的课堂笔记，或基于已有笔记逐题自测、回看与经用户同意的掌握标记。
 ---
 
 # B站/抖音/YouTube/小红书视频 → Markdown 课堂笔记
 
 ## 触发条件
 
-用户消息中包含 bilibili.com / b23.tv / BV号 / douyin.com / v.douyin.com / iesdouyin.com / youtube.com / youtu.be（含 /shorts/、/live/）/ xiaohongshu.com / xhslink.com 链接（或抖音、小红书分享口令文本），且要求总结、做笔记、整理复习资料、提取视频内容等。
+- 做笔记：用户消息中包含 bilibili.com / b23.tv / BV号 / douyin.com / v.douyin.com / iesdouyin.com / youtube.com / youtu.be（含 /shorts/、/live/）/ xiaohongshu.com / xhslink.com 链接（或抖音、小红书分享口令文本），且要求总结、做笔记、整理复习资料、提取视频内容等。
+- 复习已有课程：用户说“考考我 / 复习这门课 / 我哪些没掌握”等，直接进入“复习模式”，**不以视频URL为必要条件**。课程目录从上下文确定；无法确定时只问目录。
 
-## 平台分流（第一步先看链接属于哪个平台）
+## 平台分流（制作新笔记时先看链接属于哪个平台）
 
 - **B站** → `bili_fetch.py`：走官方API，优先字幕，按需下载音频/视频流
 - **抖音** → `douyin_fetch.py`：游客身份（无需登录/SESSDATA），下载视频到本地供语音识别（只用于本地转写，用完可清理），一般无字幕 → 必走第二步ASR（抖音视频短，耗时可忽略）。需要 `pip install gmssl`；`abogus.py` 为 GPLv3 代码（源自 Evil0ctal/Douyin_TikTok_Download_API 经 BiliNote 移植），分发需保留其许可头
@@ -59,10 +60,33 @@ python "<skill安装目录>/scripts/course_plan.py" plan "<链接>" "<课程目�
 4. fetch 后重新检查**本集**的 `subtitle_detail` 和正式文本：`cc/ai` 且正式文本存在可跳过转写；其它无字幕状态走单集 ASR。`ai_mismatch` 的存疑文本不可用于笔记。读取转写逐集 JSON，进程退出码非 0 或 JSON `status:error` 都算失败；`nothing_to_do` 时也必须确认目标页及正式文本存在，不能直接视为成功。需要恢复元数据时按三段提示处理。
 5. 每集按第三步的全部规则独立制作笔记，模板以 `next` 返回的 `note.template`（`v4` / `v4-obsidian`）为准，使用 `note_path`。`existing_note:true` 时在原文件上修正；除文件缺失外，不要整篇重写。只读这一集的正式转写稿，不要把前面各集的全文持续留在上下文。英文课正文首次出现的术语写作 **中文（Original）**，概念卡用中文卡名并加 `+ 原文：Original`；原本中文课程、或卡名本身是纯外文专名时免加原文行。截图仅用户明确要求时执行。按 `nav_cmd` 填深链，再按 `validate_cmd` 做最终门禁，确认 errors 为 0；两个命令都带本集 `--page N` 和选定模板。
 6. 成功后 `mark "<课程目录>" <序号> done --note "<笔记路径>"`；`mark done` 还会执行进程内门禁，拒绝时按报告修正后重试，不能凭先前校验结果强记 done。一集任何步骤失败（含门禁修正后仍失败），用该步的“原因 / 下一步”调用 `mark "<课程目录>" <序号> failed --reason "<原因>" --next-step "<下一步>"`，**继续下一集，不停下来反复询问用户**。课程批处理不强制扫码登录，可将可选登录建议留给用户；失败集可稍后补跑。
-7. 每次 `mark` 把摘要的 `progress` 原样转告用户。`next` 返回 `status:finished` 时，把 `receipt_text` **原样转述**，保留其中的完成数、失败集、课程索引和补跑信息，不自行编造回执。仅当 `cache.bytes > 0` 时询问是否清理缓存；用户同意后才执行 `python "<skill安装目录>/scripts/course_plan.py" clean "<课程目录>" --apply`，`cache.bytes = 0` 时不询问。
+7. 每次 `mark` 把摘要的 `progress` 原样转告用户。`next` 返回 `status:finished` 时，把 `receipt_text` **原样转述**，保留其中的完成数、失败集、课程索引、概念表、课程自测和补跑信息，不自行编造回执。仅当 `cache.bytes > 0` 时询问是否清理缓存；用户同意后才执行 `python "<skill安装目录>/scripts/course_plan.py" clean "<课程目录>" --apply`，`cache.bytes = 0` 时不询问。
 8. 中途被打断时再次 `next` 会先复查已 done 的集，再交出待处理集（含原来的 running 集）。笔记 SHA 与模板未变化时复用缓存、跳过检查；笔记改坏或缺失时退回 pending，保留 `planned_note` 供原位修复。已有草稿不会自动成为 done。需要手动复查时用 `verify "<课程目录>"`，它与 `next` 共享 SHA 校验缓存，并非强制全量检查；`index "<课程目录>"` 刷新课程索引，`status "<课程目录>"` 只读查询、不触发复查。`mark "<课程目录>" <序号> pending` 可把失败集放回待处理，再调用 `next`。`plan` 刷新同源同模式清单会保留结果；切换模式用 `start --scope`。不要把转写 `.done` 与课程笔记的 done 状态混为一谈。
 
-课程目录中的 `course.json` 是唯一状态来源；`videos/<BV号>/` 复用单视频抓取产物，同 BV 只抓取一次，`notes/` 每集一篇。默认最多探测 60 集字幕、间隔 0.3 秒；`plan --probe-all` 全探，`--no-probe` 跳过，未探测或失败按需要 ASR 保守估算。预估按六核笔记本 CPU，ASR 初值为视频时长的 0.2 倍；笔记整理初值按 I4 前15集样本的差值中位数校准为每集60秒（不含ASR，长课与不同机器可能偏离）。后续剩余时间使用已完成集的有效平均耗时修正。
+课程目录中的 `course.json` 是课程进度的唯一状态来源；`videos/<BV号>/` 复用单视频抓取产物，同 BV 只抓取一次，`notes/` 每集一篇。默认最多探测 60 集字幕、间隔 0.3 秒；`plan --probe-all` 全探，`--no-probe` 跳过，未探测或失败按需要 ASR 保守估算。预估按六核笔记本 CPU，ASR 初值为视频时长的 0.2 倍；笔记整理初值按 I4 前15集样本的差值中位数校准为每集60秒（不含ASR，长课与不同机器可能偏离）。后续剩余时间使用已完成集的有效平均耗时修正。
+
+### 复习模式（已有课程，无需视频URL）
+
+> 课程复习命令与使用方法见下文；验证结果和待完成项目见 [I5 验收记录](docs/verification/I5-概念表.md)。
+
+复习只读已有单集笔记，不重新抓取、转写或修改原笔记，不新增依赖。课程进度仍以 `course.json` 为准；掌握状态以 `概念表.md` 的勾选为入口，`course.json.mastery` 只作备份。
+
+1. 确定含 `course.json` 的课程目录，运行下面的 `--unmastered`，读取返回 JSON 的概念与已有题目。用户只问“哪些没掌握”时只列概念名；要求自测时一次只出一道题，**先不展示答案、定义或其它会泄题的内容**，等用户作答。
+2. 用户答完后，对照该题已有答案说明对错与遗漏，附该题的回看链接和笔记链接。没有回看深链时给对应笔记链接并说明无时间点，不推测时间或拼造链接。
+3. 用户答对，或说“这个我会了”，问一句“要标记为已掌握吗？”，**同意后才运行 `--master`**；拒绝或未回复则不标记。标记后再继续下一题。用户要求取消掌握时用 `--unmaster`。
+4. 不一次列出所有答案，不自行出笔记里没有的题或改写参考答案。没有可用题目时如实说明；没有已完成笔记时按提示先完成至少一集。返回 `truncated:true` 表示最多返回了 50 个概念，不能声称已覆盖全部。
+
+```bash
+python "<skill安装目录>/scripts/course_plan.py" concepts "<课程目录>" --unmastered # 只读获取没掌握的概念与题目，答案仅用于答后核对
+python "<skill安装目录>/scripts/course_plan.py" concepts "<课程目录>" # 生成或刷新概念表与课程自测
+python "<skill安装目录>/scripts/course_plan.py" concepts "<课程目录>" --master "机会成本" # 用户同意后标记掌握并刷新
+python "<skill安装目录>/scripts/course_plan.py" concepts "<课程目录>" --unmaster "机会成本" # 按用户要求取消掌握并刷新
+python "<skill安装目录>/scripts/course_plan.py" concepts "<课程目录>" --check # 只检查、不写文件，有错误时退出码为1
+```
+
+`--check`、`--unmastered`、`--master/--unmaster` 三组互斥。生成汇总课程内所有 `done` 且有笔记路径的条目，不受本次范围限制；只汇总已有概念和题目，不合并改写定义。`概念表.md` 的 `+ [ ]` 改为 `+ [x]` 即已掌握，重新生成保留勾选；文件读不出时拒绝覆盖，按三段提示处理。
+
+`课程自测.md` 的答案不折叠，手动自测先遮住答案。至少勾选一个概念并重新生成后，没掌握的题才单列在最前；“全部题目”仍保留所有题。课程索引和完成回执提供两个文件的入口；刷新失败时转述 `review_warning`，不要把旧文件当作已更新结果。内测用法见 [复习版内测](docs/dev/复习版内测.md)。
 
 ### 第一步：抓取元数据 + 字幕（B站 / YouTube）或下载视频（抖音 / 小红书）
 
