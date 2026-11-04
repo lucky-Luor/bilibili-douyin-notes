@@ -75,6 +75,11 @@ def parse_note(path):  # 只读解析笔记且始终返回错误数组
                 answer.pop(0)  # 正文非空行的缩进和行尾空格不变
             while answer and not answer[-1].strip():  # 仅剔除结尾的空白行
                 answer.pop()  # 内部段落间距和正文分隔线完整保留
+            last_line = next((index for index in range(boundary - 1, answer_start - 1, -1) if lines[index].strip()), None) if answer_start is not None else None  # 使用原始坐标识别最后非空行的围栏状态
+            if position == len(questions) - 1 and end < len(lines) and last_line is not None and visible[last_line].strip() == "---":  # 只去掉最后一题紧邻下一真实二级标题的围栏外节分隔线
+                answer.pop()  # 答案内部或围栏内的横线均不受影响
+                while answer and not answer[-1].strip():  # 移除节分隔线后再次剔除边界空白行
+                    answer.pop()  # 保持实际答案正文的内部格式
             number = int(re.match(r"\s*(\d+)", lines[question["line"] - 1])[1])  # 从来源题干保留原题号而不使用解析器枚举值
             result["quiz"].append({  # 输出适合渲染和导出的题目结构
                 "no": number, "line": question["line"], "stem": vn.V2_CORRESPOND_RE.sub("", question["stem"]).strip(),  # 去掉对应标注而保留来源题号和正文题干

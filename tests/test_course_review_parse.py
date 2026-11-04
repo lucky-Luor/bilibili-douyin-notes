@@ -3,6 +3,7 @@ import pytest  # 参数化读取和格式边界
 import course_review as cr  # 课程笔记解析入口
 from course_review_fixtures import card, note_text, write_note  # 复用离线最小笔记构造器
 from test_validate_obsidian import OBS  # 覆盖现有门禁通过的真实黑曜石笔记
+from test_validate_note_v4 import GOOD  # 复用带节间分隔线的真实四版合法讲义
 
 
 def parse(tmp_path, text=None):  # 写临时文件后调用公开接口
@@ -44,6 +45,25 @@ def test_answer_preserves_raw_content_and_next_question(tmp_path, answer):  # �
 def test_answer_marker_on_empty_line_keeps_internal_layout(tmp_path):  # 答案标记后换行时仅去除边界空白
     text = note_text().replace("**答案：** 观察放弃的最佳选择。", "**答案：**\n\n    首段缩进。\n\n第二段。\n\n")  # 前后空白行与正文缩进分开处理
     assert parse(tmp_path, text)["quiz"][0]["answer"] == "    首段缩进。\n\n第二段。"  # 不用字符串整体去空白破坏正文缩进
+
+
+@pytest.mark.parametrize("text", [OBS, GOOD])  # 直接使用现有真实四版与黑曜石合法讲义
+
+def test_real_note_last_answer_excludes_section_separator(tmp_path, text):  # 从真实文件解析最后一题不得吞入下一节分隔线
+    result = parse(tmp_path, text)  # 真实夹具写入临时笔记后经公开入口解析
+    assert result["quiz"][-1]["answer"] == "活动图本身不定义 action 含义，语义由使用者赋予。"  # 原模板的节间横线不属于答案
+
+
+@pytest.mark.parametrize("answer,at_eof", [  # 覆盖正文横线与节末横线的严格区分
+    ("首段。\n\n---\n\n末段。", False),  # 答案内部横线保留
+    ("首段。\n\n```text\n---\n```", False),  # 围栏中的横线与围栏本身保留
+    ("首段。\n\n---", True),  # 文件结尾没有下一节标题时不删除横线
+])  # 每个边界独立回归
+
+def test_section_separator_removal_keeps_answer_content(tmp_path, answer, at_eof):  # 只允许剔除最后一题紧邻下一节的围栏外横线
+    text = note_text().replace("观察放弃的最佳选择。", answer)  # 保留现有最小笔记结构
+    text = text.split("## 视频时间索引")[0] if at_eof else text.replace("## 视频时间索引", "---\n\n## 视频时间索引")  # 仅非文件结尾情形添加模板节分隔线
+    assert parse(tmp_path, text)["quiz"][-1]["answer"] == answer  # 正文内容不随节分隔线删除而丢失
 
 
 def test_source_question_numbers_and_concept_references(tmp_path):  # 原始非连续题号必须贯穿概念题目引用
