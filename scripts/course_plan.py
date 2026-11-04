@@ -1,5 +1,6 @@
 import argparse  # 解析命令行参数
 import copy  # 复制已有进度以保证校验失败不修改原对象
+import difflib  # 未知概念名称给出最接近的三个现有名称
 import hashlib  # 计算笔记原始UTF8字节摘要
 import json  # 读写课程清单
 import math  # 校验数值并计算剩余耗时
@@ -12,6 +13,7 @@ from urllib.parse import quote  # 编码可点击的相对笔记链接
 
 import bili_fetch  # 复用抓取接口和共享转写比例
 import clean_media  # 复用已有媒体候选收集规则
+import course_review  # 接入课程概念汇总与复习文件生成
 from doctor import load_config  # 复用既有标准库配置读取工具
 from _hints import HintError, hint_exit, run_cli  # 复用三段式错误提示和入口包装
 
@@ -66,6 +68,25 @@ def _validate_course(course):  # 校验读取到的清单结构
         raise _error("课程模板必须是 v4 或 v4-obsidian")  # 坏模板禁止进入编排步骤
     if course.get("asr_lang") not in (None, "zh", "en", "auto"):  # 缺字段旧清单等同未设置语言
         raise _error("课程 asr_lang 必须是 zh、en、auto 或 null")  # 阻止非法语言进入后续命令
+    if "review" in course:  # 复习摘要为可选字段以兼容旧课程清单
+        review = course["review"]  # 只校验新增字段而不清理其它历史扩展
+        if not isinstance(review, dict):  # 显式空值和其它容器都不是合法摘要
+            raise _error("课程 review 必须是对象")  # 读取和保存共用严格结构校验
+        if any(not isinstance(review.get(key), str) or not review[key].strip() for key in ("concepts_file", "quiz_file", "generated_at", "source_digest")):  # 文件名时间和摘要必须是非空字符串
+            raise _error("课程 review 文件路径、生成时间或摘要无效")  # 防止坏摘要进入索引和回执
+        if not re.fullmatch(r"[0-9a-f]{64}", review["source_digest"]):  # 摘要必须是完整的小写十六进制哈希
+            raise _error("课程 review.source_digest 必须是 SHA256 摘要")  # 保持复习过期检查输入可靠
+        if any(type(review.get(key)) is not int or review[key] < 0 for key in ("concepts", "questions")):  # 布尔值不能冒充非负整数统计
+            raise _error("课程 review 概念数和题数必须是非负整数")  # 防止无效统计误导用户
+    if "mastery" in course:  # 没有掌握备份的旧清单保持可读
+        mastery = course["mastery"]  # 备份包含已消失概念时也完整保留
+        if not isinstance(mastery, dict):  # 显式空值不等于缺失字段
+            raise _error("课程 mastery 必须是对象")  # 阻止损坏备份被静默覆盖
+        for key, value in mastery.items():  # 每条备份独立检查严格类型
+            if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):  # 概念键和备份值必须有效
+                raise _error("课程 mastery 概念键或记录无效")  # 给出统一清单修复提示
+            if not isinstance(value.get("name"), str) or not value["name"].strip() or type(value.get("mastered")) is not bool or not isinstance(value.get("changed_at"), str) or not value["changed_at"].strip():  # 名称时间用字符串且掌握状态只认布尔值
+                raise _error("课程 mastery 名称、掌握状态或变更时间无效")  # 拒绝整数真假值及不完整备份
     items = course.get("items")  # 获取全部课程条目
     if not isinstance(items, list) or not items:  # 已保存课程必须至少有一集
         raise _error("课程清单没有有效条目")  # 拒绝损坏的空清单
@@ -395,6 +416,13 @@ def write_index(root, course) -> Path:  # 从当前清单生成纯Markdown课程
     counts = {state: sum(item["status"] == state for item in chosen) for state in ("done", "failed", "pending", "running")}  # 分别统计各执行状态
     kind = "B站" if course["kind"] == "pages" else "合集"  # 区分分P课程和合集课程
     lines = [f"> 课程：{_md_text(course.get('title'))}（{kind}，UP主：{_md_text(course.get('owner'))}）", f"> 来源：{course['source_url']}", f"> 进度：完成 {counts['done']}/{len(chosen)}，失败 {counts['failed']}，待做 {counts['pending']}，进行中 {counts['running']}；总集 {len(course['items'])}，约 {estimate(course['items'])['hours']:.1f} 小时；更新时间：{now()}", "", "## 目录", ""]  # 头部只用引用块而不写前置元数据
+    if course.get("review"):  # 只有已生成复习摘要的课程才展示入口
+        review = course["review"]  # 使用清单中的相对路径而不假定自定义文件名
+        try:  # 当前生成文件只包含仍存在的概念而备份可能含历史概念
+            mastered = min(sum(course_review.read_marks(root / review["concepts_file"]).values()), review["concepts"])  # 只统计当前勾选并避免损坏文件超出概念总数
+        except (HintError, OSError, ValueError, TypeError):  # 无法读取时仍允许索引及课程操作完成
+            mastered = 0  # 保守统计不将历史备份误算为当前掌握数
+        lines.insert(3, f"> 复习：[概念表]({_md_link_path(review['concepts_file'])})（{review['concepts']} 个概念，已掌握 {mastered}）｜[课程自测]({_md_link_path(review['quiz_file'])})（{review['questions']} 题）")  # 复习入口紧跟进度行
     section = None  # 合集每次章节变化时重新开表
     header = ["| 序号 | 标题 | 时长 | 状态 | 笔记 | 视频 |", "| --- | --- | --- | --- | --- | --- |"]  # 表头顺序固定便于阅读与解析
     if course["kind"] == "pages":  # 分P目录不展示章节小标题
@@ -425,9 +453,53 @@ def write_index(root, course) -> Path:  # 从当前清单生成纯Markdown课程
     return path  # 按接口约定返回Path对象
 
 
+def _refresh_review(root, course):  # 自动刷新失败不阻断课程执行和索引重建
+    if not any(item.get("status") == "done" and item.get("note") for item in course["items"]):  # 全课完成笔记都参与而不受当前范围限制
+        return {}  # 尚未有笔记时不创建空复习文件
+    updated = copy.deepcopy(course)  # 失败时保留原清单中的掌握备份与复习摘要
+    try:  # 仅将可预期的数据和文件错误降级为复习警告
+        course_review.generate(root, updated)  # 生成器原地更新复习字段但不保存课程清单
+        if updated != course:  # 内容未变时不重写课程清单
+            save_course(root, updated)  # 成功生成后由编排层原子保存复习备份
+        course.clear()  # 仅在生成和保存均成功后替换内存状态
+        course.update(updated)  # 索引和结束回执立即使用最新复习摘要
+    except (HintError, OSError, ValueError, TypeError, KeyError, OverflowError) as exc:  # 合理失败不能撤销已完成的课程操作
+        reason = exc.reason if isinstance(exc, HintError) else str(exc)  # 提取业务原因避免三段提示挤满错误流
+        warning = "课程复习刷新失败：" + " ".join(reason.splitlines())  # 外部错误也只输出一行警告
+        print(warning, file=sys.stderr)  # 人类提示与标准输出机器回执分离
+        return {"review_warning": warning}  # 各刷新入口原样附加可恢复警告
+    return {}  # 成功时不增加多余回执字段
+
+
+def concepts(root, check=False, unmastered=False, master=None, unmaster=None):  # 提供课程复习的生成检查查询和掌握标记入口
+    if (check and unmastered) or ((check or unmastered) and (master or unmaster)):  # 掌握和取消掌握允许同次使用但不能与只读模式混用
+        raise _error("--check、--unmastered 与 --master/--unmaster 三组参数互斥", "选择一种只读模式，或同时使用 --master 和 --unmaster 更新掌握状态")  # 直接调用也遵守命令行互斥要求
+    root = Path(root).resolve()  # 生成统计和文件回执均使用绝对课程路径
+    course = load_course(root)  # 复用兼容旧清单的严格结构校验
+    if not any(item.get("status") == "done" and item.get("note") for item in course["items"]):  # 所有模式统一检查全课程的已完成笔记
+        hint_exit("还没有完成的笔记，先做完至少一集", "本次没有生成或检查复习文件", "先完成一集笔记并 mark done，再运行 concepts")  # 没有数据时不写任何文件
+    if check:  # 课程级门禁保持纯只读
+        report = course_review.check(course_review.build(root, course), root)  # 复用模型构建和课程级检查接口
+        return {key: report[key] for key in ("errors", "warnings", "summary")}  # 检查回执仅保留错误警告和统计
+    if unmastered:  # 给复习模式返回未掌握概念及其原题
+        return course_review.unmastered(root, course)  # 不重新生成文件也不保存备份
+    if master or unmaster:  # 未知标记名称必须在写文件前提供不可恢复的参数提示
+        known = {concept["key"]: concept["name"] for concept in course_review.build(root, course)["concepts"]}  # 只接受当前课程真实概念而不是历史掌握备份
+        for name in (master or []) + (unmaster or []):  # 同次正反标记都校验并保持生成器列表接口
+            key = course_review.concept_key(name)  # 与模型合并共享标准化名称规则
+            if key not in known:  # 不能将错别字静默新增为备份概念
+                closest = difflib.get_close_matches(key, list(known), n=3, cutoff=0)  # 最多列出三个最接近的可选名称
+                hint_exit(f"课程中找不到概念：{name}", "本次没有修改复习文件或掌握状态", "检查名称后重试；最接近的概念：" + "、".join(known[value] for value in closest))  # 错误参数沿用三段式直接退出
+    result = course_review.generate(root, course, master=master or [], unmaster=unmaster or [])  # 重复选项以列表传入生成器并保留其勾选保护
+    save_course(root, course)  # 两个复习文件写完后保存生成器更新的摘要和掌握状态
+    return result  # 保留生成模块定义的完整统计回执
+
+
 def index(root):  # 命令行主动重建当前课程索引
     root = Path(root).resolve()  # 命令回执始终采用绝对路径
-    return {"index_file": str(write_index(root, load_course(root)))}  # 读取真实清单并返回索引位置
+    course = load_course(root)  # 读取后复用同一个内存清单刷新复习和索引
+    review_result = _refresh_review(root, course)  # 主动重建索引时同步刷新并保存复习摘要
+    return {"index_file": str(write_index(root, course)), **review_result}  # 返回索引位置并保留可恢复复习警告
 
 
 def _cache_candidates(root):  # 为干跑和实际删除共同收集并预检媒体候选
@@ -482,17 +554,23 @@ def _finished_receipt(root, course):  # 无待处理条目时写索引并汇总�
     chosen = selected_items(course)  # 完成回执不包含范围外历史结果
     done = sum(item["status"] == "done" for item in chosen)  # 精确统计本轮成功
     failed = [item for item in chosen if item["status"] == "failed"]  # 保留完整恢复字段构造文案
+    review_result = _refresh_review(root, course)  # 完成回执前刷新复习文件并持久保存摘要
     index_file = write_index(root, course).resolve()  # 发出回执前保证索引已落盘
     notes_dir = (root / "notes").resolve()  # 笔记目录即使尚不存在也使用绝对路径
     dry_run = clean(root)  # 完成回执直接复用clean的干跑逻辑
     cache = {key: dry_run[key] for key in ("files", "bytes")}  # 机器字段只包含数量及字节
     lines = [f"课程《{course.get('title', '')}》本次范围 {len(chosen)} 集，完成 {done} 篇笔记，失败 {len(failed)} 集。", f"课程索引：{index_file}", f"笔记目录：{notes_dir}"]  # 首句明确课程所选规模及完成失败数量
+    review_files = {}  # 仅在已生成摘要时扩展结束回执的文件字段
+    if course.get("review"):  # 保留无复习产物的旧结束回执兼容
+        review = course["review"]  # 读取自动刷新后最新统计
+        review_files = {key: str((root / review[key]).resolve()) for key in ("concepts_file", "quiz_file")}  # 两个产物都采用绝对路径
+        lines[2:2] = [f"概念表：{review_files['concepts_file']}（{review['concepts']} 个概念）", f"课程自测：{review_files['quiz_file']}（{review['questions']} 题）"]  # 两行复习交付信息紧跟课程索引
     if failed:  # 没有失败则不生成补跑段落
         lines.append("失败集补跑：")  # 用户可以逐集恢复而不重复已完成任务
         for item in failed:  # 每集都列出原因建议及实际补跑命令
             lines.append(f"+ 第 {item['index']} 集 {item['title']}：{item.get('reason') or ''}；下一步：{item.get('next_step') or ''}；补跑：{item.get('rerun') or ''}")  # 保留调用方提供的恢复步骤
     lines.append(f"缓存的视频和音频共 {cache['bytes'] / 1048576:.1f} MB，要清理吗？（清理不影响笔记和转写稿）" if cache["bytes"] else "没有需要清理的缓存。")  # 明确只询问媒体缓存且不影响正式产物
-    return {"status": "finished", "done": done, "failed": len(failed), "failed_items": [item["index"] for item in failed], "index_file": str(index_file), "notes_dir": str(notes_dir), "cache": cache, "receipt_text": "\n".join(lines)}  # 扩展原结束回执并保持已有结果字段
+    return {"status": "finished", "done": done, "failed": len(failed), "failed_items": [item["index"] for item in failed], "index_file": str(index_file), "notes_dir": str(notes_dir), "cache": cache, "receipt_text": "\n".join(lines), **review_files, **review_result}  # 保留原回执并附复习产物和可恢复警告
 
 
 def status(root):  # 只读查询当前范围的进度
@@ -589,8 +667,9 @@ def verify(root):  # 显式重检选定范围的已完成笔记
     course = load_course(root)  # 读取最新清单并验证可选门禁字段
     checked = sum(item["status"] == "done" for item in selected_items(course))  # 统计重检前原完成数量
     reopened = recheck(root, course)  # 与next使用同一恢复和持久化逻辑
+    review_result = _refresh_review(root, course)  # 复核完成后同步复习文件和清单备份
     write_index(root, course)  # 重检恢复或缓存更新后始终刷新课程索引
-    return {"checked": checked, "passed": checked - len(reopened), "reopened": reopened}  # 重开项从通过数量中扣除
+    return {"checked": checked, "passed": checked - len(reopened), "reopened": reopened, **review_result}  # 重开项从通过数量扣除并保留复习警告
 
 
 def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
@@ -695,6 +774,7 @@ def mark(root, index, state, note=None, reason=None, next_step=None, rerun=None)
             item.update(reason=None, next_step=None, rerun=None)  # 不保留过期补跑提示
     item["status"] = state  # 校验结束后才改变状态
     save_course(root, course)  # 只用原子写更新清单
+    review_result = _refresh_review(root, course)  # 完成失败及补跑后都尝试同步全课复习文件
     write_index(root, course)  # 成功失败及放回待办每次都刷新课程索引
     chosen = selected_items(course)  # 进度独立计算当前选定范围
     done = sum(entry["status"] == "done" for entry in chosen)  # 范围外历史结果不计入本次进度
@@ -711,7 +791,7 @@ def mark(root, index, state, note=None, reason=None, next_step=None, rerun=None)
         progress = f'[{position}/{len(chosen)}] ⏳ {item["title"]}：已放回待处理｜已完成 {done}，失败 {failed}，剩余约 {math.ceil(remaining / 60)} 分钟'  # 不误报制作成功
     progress = progress.replace("\n", " ").replace("\r", " ")  # 外部标题与原因不能破坏单行进度
     print(progress, file=sys.stderr)  # stdout 保持机器摘要
-    return {"index": index, "status": state, "done": done, "failed": failed, "remaining_seconds": remaining, "progress": progress}  # main 最后统一打印 JSON
+    return {"index": index, "status": state, "done": done, "failed": failed, "remaining_seconds": remaining, "progress": progress, **review_result}  # 主入口打印机器摘要并保留非阻断复习警告
 
 
 class _Parser(argparse.ArgumentParser):  # 让参数错误沿用项目三段式提示
@@ -759,6 +839,12 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
     mark_parser.add_argument("--rerun")  # 可选显式补跑命令
     index_parser = commands.add_parser("index", help="重建课程Markdown索引")  # 主动刷新当前所选条目索引
     index_parser.add_argument("root", metavar="ROOT")  # 索引来自根目录课程清单
+    concepts_parser = commands.add_parser("concepts", help="生成课程概念表、自测或只读检查")  # 课程复习通过单独子命令提供
+    concepts_parser.add_argument("root", metavar="ROOT")  # 已完成笔记从课程目录读取
+    concepts_parser.add_argument("--check", action="store_true")  # 只读门禁有错误时由主入口退出一
+    concepts_parser.add_argument("--unmastered", action="store_true")  # 返回尚未掌握的概念及题目
+    concepts_parser.add_argument("--master", action="append")  # 重复选项保留列表以一次标记多个概念
+    concepts_parser.add_argument("--unmaster", action="append")  # 允许与已掌握参数同次使用并由业务函数校验分组互斥
     clean_parser = commands.add_parser("clean", help="查看或清理课程媒体缓存")  # 默认仅统计不删除
     clean_parser.add_argument("root", metavar="ROOT")  # 仅处理课程videos下的候选缓存
     clean_parser.add_argument("--apply", action="store_true")  # 显式开关才实际删除媒体
@@ -766,7 +852,7 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
         args = parser.parse_args(argv)  # 支持调用者提供参数列表
         options = vars(args).copy()  # 生成业务函数关键字参数
         command = options.pop("command")  # 子命令名称不传入业务函数
-        result = {"plan": plan, "start": start, "status": status, "next": course_next, "mark": mark, "verify": verify, "index": index, "clean": clean}[command](**options)  # 保留复核并分发索引及清理入口
+        result = {"plan": plan, "start": start, "status": status, "next": course_next, "mark": mark, "verify": verify, "index": index, "clean": clean, "concepts": concepts}[command](**options)  # 复习入口复用课程命令行的统一错误处理
     except HintError as exc:  # 已经具备三段式信息的错误
         print(json.dumps({"status": "error", **exc.to_dict()}, ensure_ascii=False))  # 即使失败也保留末行机器可读 JSON
         raise  # 交给公共入口包装输出人类提示
@@ -774,11 +860,13 @@ def main(argv=None):  # 支持显式参数列表以便离线调用
         error = _error(f"无法完成课程操作：{exc}")  # 隐藏底层错误堆栈
         print(json.dumps({"status": "error", **error.to_dict()}, ensure_ascii=False))  # 输出统一错误摘要
         raise error from None  # 交给公共入口包装处理
-    for warning in result.get("warnings", []):  # 模板切换提示也供人类直接阅读
-        print("warning: " + warning, file=sys.stderr)  # 标准输出保持唯一机器摘要
+    for warning in result.get("warnings", []):  # 模板提示和课程检查警告都只写入错误流
+        print("warning: " + (warning.get("message", str(warning)) if isinstance(warning, dict) else str(warning)), file=sys.stderr)  # 同时兼容旧字符串与课程门禁结构化警告
     if result.get("hint_optional"):  # 可选登录建议同时出现在结构化回执中
         print("提示：" + result["hint_optional"], file=sys.stderr)  # 人类提示只输出到错误流
     print(json.dumps(result, ensure_ascii=False, allow_nan=False))  # 标准输出最后一行为中文无转义 JSON
+    if command == "concepts" and options.get("check") and result["errors"]:  # 只读课程门禁先完整打印报告再返回失败退出码
+        raise SystemExit(1)  # 不把结构化检查报告改写成通用异常摘要
     return result  # 便于离线测试和后续阶段直接调用
 
 

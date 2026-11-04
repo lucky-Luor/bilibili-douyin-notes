@@ -44,6 +44,42 @@ def test_stale_on_digest_mismatch(tmp_path):  # 保存摘要与当前来源不�
     assert "CR-STALE" in codes(cr.check(model, tmp_path), "errors")  # 不依赖时间戳比较
 
 
+def test_note_rename_without_content_change_invalidates_review(tmp_path):  # 原字节不变的重命名也必须使旧笔记链接过期
+    model = ready(tmp_path)  # 准备摘要匹配的复习产物
+    current = model["course"]  # 使用生成时课程快照模拟清单路径更新
+    item = current["items"][0]  # 仅移动一篇已完成笔记
+    original = tmp_path / item["note"]  # 保存生成文件曾引用的旧路径
+    raw = original.read_bytes()  # 独立记录内容以证明没有修改笔记字节
+    renamed = original.with_name("重命名 中文 课堂.md")  # 文件名包含中文和空格
+    original.rename(renamed)  # 真实移动文件而不复制或改写内容
+    item["note"] = renamed.relative_to(tmp_path).as_posix()  # 清单指向仍然有效的新笔记路径
+    assert renamed.read_bytes() == raw and not original.exists()  # 排除内容变化和残留旧文件干扰
+    rebuilt = cr.build(tmp_path, current)  # 从新路径读取完全相同的笔记内容
+    assert "CR-STALE" in codes(cr.check(rebuilt, tmp_path), "errors")  # 旧复习文件中的路径失效必须提示重建
+    assert rebuilt["source_digest"] != model["source_digest"]  # 来源路径属于影响渲染的摘要输入
+    assert cr.source_digest(tmp_path, current) == rebuilt["source_digest"]  # 构建摘要与检查摘要保持同一协议
+    make_current(tmp_path, rebuilt)  # 模拟重新生成并保存新的摘要
+    assert "CR-STALE" not in codes(cr.check(rebuilt, tmp_path), "errors")  # 正常刷新后不再误报过期
+
+
+@pytest.mark.parametrize("target", ["item", "course"])  # 条目标题和课程标题都直接影响复习展示
+
+def test_title_change_without_note_edit_invalidates_review(tmp_path, target):  # 展示标题变化不能误判已有复习产物仍然新鲜
+    model = ready(tmp_path)  # 初始文件与保存摘要保持一致
+    current = model["course"]  # 只更新课程清单而不修改笔记文件
+    note = tmp_path / current["items"][0]["note"]  # 保存唯一来源笔记位置
+    raw = note.read_bytes()  # 独立记录原始笔记字节
+    owner = current["items"][0] if target == "item" else current  # 参数化覆盖两层展示标题
+    owner["title"] = "更新后的 中文 课程标题"  # 模拟课程元数据刷新或用户更正标题
+    rebuilt = cr.build(tmp_path, current)  # 已有复习摘要仍然来自更名前的课程
+    assert note.read_bytes() == raw  # 标题变更不依赖笔记内容差异
+    assert "CR-STALE" in codes(cr.check(rebuilt, tmp_path), "errors")  # 已生成复习中的旧标题必须触发重建提示
+    assert rebuilt["source_digest"] != model["source_digest"]  # 标题变化应更新来源摘要
+    assert cr.source_digest(tmp_path, current) == rebuilt["source_digest"]  # 两条摘要构造路径不能发生协议漂移
+    make_current(tmp_path, rebuilt)  # 模拟生成完成后的新摘要持久化
+    assert "CR-STALE" not in codes(cr.check(rebuilt, tmp_path), "errors")  # 新标题生成完成后应恢复新鲜状态
+
+
 def test_actual_edit_without_mark_invalidates_even_same_model(tmp_path):  # CR-STALE必须覆盖不更新gate的文件变化
     item = write_note(tmp_path)  # 保存真实内容
     item["gate"] = {"sha256": "a" * 64}  # 故意不可信的旧门禁缓存
