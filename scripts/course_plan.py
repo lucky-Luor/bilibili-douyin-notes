@@ -15,7 +15,7 @@ import clean_media  # 复用已有媒体候选收集规则
 from doctor import load_config  # 复用既有标准库配置读取工具
 from _hints import HintError, hint_exit, run_cli  # 复用三段式错误提示和入口包装
 
-NOTE_SECONDS = 90  # 每集笔记的预计整理时间
+NOTE_SECONDS = 60  # I4前十五集总耗时减去ASR耗时的中位数为六十秒
 FETCH_SECONDS_PER_ITEM = 5  # 每集抓取的预计时间
 MAX_ITEMS = 200  # 一次选择全部时允许的最大集数
 MAX_HOURS = 100  # 一次选择全部时允许的最大视频小时数
