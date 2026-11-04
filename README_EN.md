@@ -167,7 +167,7 @@ Multipart videos default to the current video; expand a collection with `--scope
 
 The course model and CLI are implemented and available locally. Run the commands from the project root after at least one episode is done. Review reads existing notes, adds no dependencies, and accepts existing `course.json` files.
 
-The full offline suite and UTF-8 run each passed 849 tests with 5 skipped. Programmatic acceptance passed on 15 real lessons. The synthetic 40-note performance case took about 0.09 seconds; 40 real lessons were not tested, following the user's decision to accept 15. See the [I5 verification record](docs/verification/I5-概念表.md) for results and outstanding checks.
+The full offline suite and UTF-8 run each passed 854 tests with 5 skipped. Programmatic acceptance passed on 15 real lessons. The synthetic 40-note performance case took about 0.09 seconds; 40 real lessons were not tested, following the user's decision to accept 15. See the [I5 verification record](docs/verification/I5-概念表.md) for results and outstanding checks.
 
 ```bash
 python scripts/course_plan.py concepts "<course root>" # 生成或刷新概念表.md、课程自测.md
