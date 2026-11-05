@@ -61,6 +61,17 @@ def test_concepts_generate_legacy_course_and_all_done_notes(course, capsys):  # 
     assert saved["review"]["concepts"] == 2 and saved["review"]["questions"] == 8 and len(saved["mastery"]) == 2  # 摘要和掌握备份已经持久化
 
 
+def test_concepts_generate_and_marks_refresh_index(course, capsys):  # 生成与命令行勾选后索引立即反映复习入口和掌握数
+    root, _ = course  # 两篇完成笔记的课程
+    result, _ = invoke(capsys, "concepts", root)  # 首次生成复习文件
+    index = (root / cp.INDEX_FILE).read_text(encoding="utf-8")  # 读取同步刷新的索引
+    assert Path(result["index_file"]) == root / cp.INDEX_FILE  # 回执给出索引位置
+    assert "> 复习：[概念表](概念表.md)（2 个概念，已掌握 0）" in index  # 无需额外运行 index 即出现入口
+    name = cr.build(root, cp.load_course(root))["concepts"][0]["name"]  # 取一个真实概念名
+    invoke(capsys, "concepts", root, "--master", name)  # 命令行标记一个已掌握
+    assert "已掌握 1）" in (root / cp.INDEX_FILE).read_text(encoding="utf-8")  # 索引掌握数随之更新
+
+
 def test_concepts_check_success_is_readonly(course, capsys):  # 新鲜生成文件检查通过且完全不写文件
     root, _ = course  # 隔离真实课程
     cp.concepts(root)  # 准备已生成的复习产物
