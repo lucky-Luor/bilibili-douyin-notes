@@ -492,7 +492,8 @@ def concepts(root, check=False, unmastered=False, master=None, unmaster=None):  
                 hint_exit(f"课程中找不到概念：{name}", "本次没有修改复习文件或掌握状态", "检查名称后重试；最接近的概念：" + "、".join(known[value] for value in closest))  # 错误参数沿用三段式直接退出
     result = course_review.generate(root, course, master=master or [], unmaster=unmaster or [])  # 重复选项以列表传入生成器并保留其勾选保护
     save_course(root, course)  # 两个复习文件写完后保存生成器更新的摘要和掌握状态
-    return result  # 保留生成模块定义的完整统计回执
+    result["index_file"] = str(write_index(root, course))  # 同步刷新索引中的复习入口与已掌握数量
+    return result  # 保留生成模块定义的完整统计回执并附索引位置
 
 
 def index(root):  # 命令行主动重建当前课程索引
