@@ -13,8 +13,109 @@ import validate_note  # 被测模块（conftest 已把 scripts/ 加入 sys.path�
 
 ROOT = Path(__file__).resolve().parents[1]  # 仓库根目录
 
-# 合规 v4 lecture 笔记：无 frontmatter / 无一级标题 / + 列表 / 答案与索引不折叠
+# 合规 v4 lecture 笔记（新写法）：无 frontmatter / 无一级标题 / 小节先场景后结论、节末「记住这个就够了」/
+# 本讲小结 / 自测题（面试速答）答案一段多句 / 时间索引不折叠
 GOOD = """> 核心主线：用例是散落的珠子、活动图是串起它们的线。
+> 本讲目标：读完你能回答「散落的用例怎么串成流程」「action 的颜色各代表什么」
+> 课程来源：面向对象分析与设计（B站 BV1zMpaeTEJa，UP主：测试UP，选集 2.13，约 26 分钟）
+
+## 目录
++ [1. 从用例到活动图](#1-从用例到活动图)
++ [2. 活动图的颜色语义](#2-活动图的颜色语义)
++ [本讲知识地图](#本讲知识地图)
++ [本讲小结](#本讲小结)
++ [概念卡片](#概念卡片)
++ [自测题（面试速答）](#自测题面试速答)
++ [视频时间索引](#视频时间索引)
+
+---
+
+## 1. 从用例到活动图
+EBP 把目标切成一个个用例之后，新问题就来了：用例是散的，描述协作与先后顺序需要活动图。
+
+它要补上的是三件事：
++ 业务流程讲的是事情的**先后顺序**
++ EBP 切分后用例全是散的，用例之间缺一种描述方式
++ 描述主参与者协作的工具就是**活动图**
+
+> **记住这个就够了**：用例负责切分目标，活动图负责把它们串成流程。
+
+## 2. 活动图的颜色语义
+**action** 圆角矩形是活动图最基本的符号，可只看形状，你分不清它是用例还是系统内部动作。
+
+action 的语义由使用者定义，课程用颜色赋予含义：浅蓝是用例、黄色是系统外、红色是内部实现。
+
+**打个比方：** 颜色就像地图的图例，同一个符号配上图例才知道它代表什么。
+
++ 颜色约定因人因公司而异，没有固定方式
+
+> **记住这个就够了**：action 本身没有固定含义，颜色是课程额外给它加的语义。
+
+## 本讲知识地图
+```mermaid
+graph TD
+  R((业务流程建模))
+  subgraph 从用例到活动图
+    C1[活动图]
+  end
+  subgraph 颜色约定
+    C2[颜色语义]
+  end
+  R --> C1
+  C1 -->|用颜色区分 action| C2
+```
+
+## 本讲小结
+| 机制/概念 | 解决什么问题 | 一句话 |
+| --- | --- | --- |
+| 活动图 | 散落的用例表达不了先后与协作 | 把用例串成业务流程 |
+| 颜色语义 | action 符号本身没有含义 | 用颜色区分用例、系统外与内部实现 |
+
+**学完能说的 3 句话：**
+1. 用例切分目标，活动图把用例串成有先后顺序的业务流程。
+2. action 是活动图最基本的符号，语义由使用者定义。
+3. 课程用浅蓝、黄色、红色区分用例、系统外活动与内部实现。
+
+## 概念卡片
+### 活动图
++ 定义：描述协作与先后顺序的 UML 图
++ 出现：第 1 节「从用例到活动图」、第 2 节「活动图的颜色语义」
++ 依赖：颜色语义
++ 易混：颜色语义——前者是图，后者是约定
+
+### 颜色语义
++ 定义：课程为 action 约定的额外含义
++ 出现：第 2 节「活动图的颜色语义」、第 1 节「从用例到活动图」
++ 依赖：活动图
++ 易混：
+
+## 自测题（面试速答）
+1. 为什么基于用例的分析需要活动图来补充？（对应：活动图）
+
+**答案：** 用例图无法表达协作与先后。EBP 切分出的用例彼此是散的，而业务流程关心的恰恰是事情的先后顺序，所以要用活动图把有关系的用例串起来。
+
+2. 课程的颜色约定分别表示什么？（对应：颜色语义）
+
+**答案：** 浅蓝是用户目标用例、黄色是系统外活动、红色是系统内部实现。这样一张活动图里能一眼区分哪些是用例、哪些不归系统管。
+
+3. 活动图描述的核心关系是什么？（对应：活动图）
+
+**答案：** 主参与者之间的协作与事情的先后顺序。用例图只列出“有哪些目标”，活动图回答“这些目标按什么顺序、由谁配合完成”。
+
+4. 为什么 action 的语义需要使用者自己定义？（对应：颜色语义）
+
+**答案：** 活动图本身不定义 action 含义，语义由使用者赋予。课程用颜色补上这层含义，但颜色约定因人因公司而异，团队内部统一即可。
+
+---
+
+## 视频时间索引
++ [00:00](https://www.bilibili.com/video/BV1zMpaeTEJa?p=13&t=0) 1. 从用例到活动图
++ [05:10](https://www.bilibili.com/video/BV1zMpaeTEJa?p=13&t=305) 2. 活动图的颜色语义
+"""
+
+# 旧写法 v4 笔记（2026-11-07 之前）：小节以 **核心思想：** 开头、无本讲小结、答案一句话；
+# 新门禁下仍须 errors 为 0，只多出 V4-IDEA / V4-SUM / V4-QA 提示
+LEGACY = """> 核心主线：用例是散落的珠子、活动图是串起它们的线。
 > 课程来源：面向对象分析与设计（B站 BV1zMpaeTEJa，UP主：测试UP，选集 2.13，约 26 分钟）
 
 ## 目录
@@ -45,10 +146,10 @@ GOOD = """> 核心主线：用例是散落的珠子、活动图是串起它们�
 ```mermaid
 graph TD
   R((业务流程建模))
-  subgraph S1[从用例到活动图]
+  subgraph 从用例到活动图
     C1[活动图]
   end
-  subgraph S2[颜色约定]
+  subgraph 颜色约定
     C2[颜色语义]
   end
   R --> C1
@@ -104,7 +205,7 @@ def make_env(tmp_path, text=GOOD, name=NAME, platform="bilibili"):
                                 "suggested_note_type": "lecture"}), encoding="utf-8")  # 建议类型
     txt = tmp_path / "txt"  # 转写稿目录
     txt.mkdir(exist_ok=True)  # 创建
-    (txt / "13_P13.txt").write_text("[00:00] 开场\n[05:05] 颜色\n" + "转写正文" * 300,
+    (txt / "13_P13.txt").write_text("[00:00] 开场\n[05:05] 颜色\n" + "转写正文" * 450,
                                     encoding="utf-8")  # 第 13 分P转写稿（含两条时间行）
     return note, meta, txt  # 返回三个路径
 
@@ -197,15 +298,78 @@ def test_dash_list_warns(tmp_path):
     assert warns(r, "V4-LIST")  # 提示
 
 
-def test_blank_line_after_heading_warns(tmp_path):
-    r = run(tmp_path, GOOD.replace("## 1. 从用例到活动图\n**核心思想",
-                                   "## 1. 从用例到活动图\n\n**核心思想"))  # 标题后空行
-    assert warns(r, "V4-IDEA") and not errs(r, "V4-IDEA")  # 只提示不报错
+def test_missing_recall_warns_not_error(tmp_path):
+    r = run(tmp_path, GOOD.replace("> **记住这个就够了**：用例负责切分目标，活动图负责把它们串成流程。\n",
+                                   ""))  # 去掉第 1 节收尾句
+    assert warns(r, "V4-IDEA") and not errs(r, "V4-IDEA") and r["ok"]  # 只提示不报错
 
 
-def test_missing_core_idea_is_error(tmp_path):
-    r = run(tmp_path, GOOD.replace("**核心思想：** 用例是散的", "用例是散的"))  # 去掉核心思想
-    assert errs(r, "V4-IDEA")  # 报错
+def test_recall_must_be_last_line(tmp_path):
+    r = run(tmp_path, GOOD.replace("活动图负责把它们串成流程。\n",
+                                   "活动图负责把它们串成流程。\n\n补充一句结论之后的正文。\n"))  # 收尾句后还有正文
+    assert warns(r, "V4-IDEA")  # 收尾句必须是本节最后一行
+
+
+def test_recall_colon_inside_bold_accepted(tmp_path):
+    r = run(tmp_path, GOOD.replace("> **记住这个就够了**：用例", "> **记住这个就够了：** 用例"))  # 冒号在加粗内
+    assert not warns(r, "V4-IDEA"), r["warnings"]  # 两种冒号位置都接受
+
+
+def test_core_idea_no_longer_required(tmp_path):
+    r = run(tmp_path, GOOD.replace("## 1. 从用例到活动图\n",
+                                   "## 1. 从用例到活动图\n**核心思想：** 旧写法开头句。\n"))  # 旧写法开头
+    assert r["ok"] and not warns(r, "V4-IDEA"), r["warnings"]  # 写了也不报错不提示
+
+
+def test_legacy_note_still_passes(tmp_path):
+    r = run(tmp_path, LEGACY)  # 旧写法笔记
+    assert r["ok"], r["errors"]  # 旧笔记 errors 仍为 0
+    assert {w["check"] for w in r["warnings"]} == {"V4-IDEA", "V4-SUM", "V4-QA"}, r["warnings"]  # 只多出新提示
+
+
+def test_summary_missing_warns_for_lecture_only(tmp_path):
+    a = GOOD.index("## 本讲小结")  # 小结起点
+    b = GOOD.index("## 概念卡片")  # 小结终点
+    text = GOOD[:a] + GOOD[b:]  # 去掉本讲小结
+    r = run(tmp_path, text)  # lecture
+    assert warns(r, "V4-SUM") and r["ok"]  # 只提示
+    r2 = run(tmp_path, text.split("---\n\n## 视频时间索引")[0], note_type="short")  # short 可省
+    assert not warns(r2, "V4-SUM"), r2["warnings"]  # 不提示
+
+
+def test_summary_table_and_three_lines_checked(tmp_path):
+    text = GOOD.replace("| 颜色语义 | action 符号本身没有含义 | 用颜色区分用例、系统外与内部实现 |\n", "")  # 只剩 1 行数据
+    text = text.replace("3. 课程用浅蓝、黄色、红色区分用例、系统外活动与内部实现。\n", "")  # 只剩 2 句
+    msgs = [w["message"] for w in warns(run(tmp_path, text), "V4-SUM")]  # 小结提示
+    assert any("表格" in m for m in msgs) and any("恰好 3 条" in m for m in msgs), msgs  # 两项都提示
+
+
+def test_short_answer_warns(tmp_path):
+    r = run(tmp_path, GOOD.replace(
+        "**答案：** 用例图无法表达协作与先后。EBP 切分出的用例彼此是散的，而业务流程关心的恰恰是事情的先后顺序，所以要用活动图把有关系的用例串起来。",
+        "**答案：** 用例图无法表达协作与先后。"))  # 答案只剩一句结论
+    assert [w["line"] for w in warns(r, "V4-QA")] and r["ok"]  # 只提示
+
+
+def test_yuque_incompatible_subgraph_and_text_fence_warn(tmp_path):
+    text = GOOD.replace("  subgraph 从用例到活动图\n", "  subgraph S1[从用例到活动图]\n")  # 旧子图写法
+    text = text.replace("## 1. 从用例到活动图\n", "## 1. 从用例到活动图\n```text\n用例 → 活动图\n```\n")  # text 代码块
+    r = run(tmp_path, text)  # 跑门禁
+    msgs = [w["message"] for w in warns(r, "V4-YUQUE")]  # 语雀兼容提示
+    assert any("subgraph" in m for m in msgs) and any("plain" in m for m in msgs) and r["ok"], msgs  # 两项都只提示
+
+
+def test_plain_fence_and_plain_subgraph_pass(tmp_path):
+    text = GOOD.replace("## 1. 从用例到活动图\n", "## 1. 从用例到活动图\n```plain\n用例 → 活动图\n```\n")  # plain 代码块
+    r = run(tmp_path, text)  # 跑门禁
+    assert not warns(r, "V4-YUQUE"), r["warnings"]  # 新写法不提示
+
+
+def test_analogy_label_format(tmp_path):
+    ok = run(tmp_path, GOOD.replace("**打个比方：**", "**打个比方（笔记补充）：**"))  # 笔记补充写法
+    assert not warns(ok, "V4-ANALOGY"), ok["warnings"]  # 合法
+    bad = run(tmp_path, GOOD.replace("**打个比方：**", "**打个比方（补充类比）：**"))  # 自造写法
+    assert warns(bad, "V4-ANALOGY")  # 提示
 
 
 # ---------- 内容规则 ----------

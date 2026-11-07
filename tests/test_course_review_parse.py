@@ -51,7 +51,8 @@ def test_answer_marker_on_empty_line_keeps_internal_layout(tmp_path):  # 答案�
 
 def test_real_note_last_answer_excludes_section_separator(tmp_path, text):  # 从真实文件解析最后一题不得吞入下一节分隔线
     result = parse(tmp_path, text)  # 真实夹具写入临时笔记后经公开入口解析
-    assert result["quiz"][-1]["answer"] == "活动图本身不定义 action 含义，语义由使用者赋予。"  # 原模板的节间横线不属于答案
+    assert result["quiz"][-1]["answer"] == ("活动图本身不定义 action 含义，语义由使用者赋予。"  # 面试速答首句结论
+                                            "课程用颜色补上这层含义，但颜色约定因人因公司而异，团队内部统一即可。")  # 多句答案完整保留且不吞入节间横线
 
 
 @pytest.mark.parametrize("answer,at_eof", [  # 覆盖正文横线与节末横线的严格区分
