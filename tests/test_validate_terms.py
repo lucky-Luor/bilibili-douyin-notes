@@ -35,7 +35,7 @@ def test_terms_only_foreign_lecture(tmp_path, lang, nt):  # 新规则严格限�
 @pytest.mark.parametrize("mention", ["活动图（Activity Diagram）", "**活动图（Activity Diagram）**", "**活动图**（Activity Diagram）", "活动图(Activity Diagram)"])  # 普通与粗体写法均支持
 def test_valid_original_and_first_body_mention(tmp_path, mention):  # 不把目录标题或概念卡抢作正文首次
     text = GOOD.replace("### 活动图\n", "### 活动图\n+ 原文：Activity Diagram\n").replace("### 颜色语义\n", "### 颜色语义\n+ 原文：Color Semantics\n")  # 卡片增加原文
-    text = text.replace("**核心思想：** 用例是散的，描述协作与先后顺序需要活动图。", "**核心思想：** " + mention + "用于描述协作。")  # 正文首次紧跟原文
+    text = text.replace("用例是散的，描述协作与先后顺序需要活动图。", "用例是散的，" + mention + "用于描述协作。")  # 正文首次紧跟原文
     text = text.replace("## 2. 活动图的颜色语义\n", "## 2. 活动图的颜色语义\n").replace("action 的语义由使用者定义", "颜色语义（Color Semantics）由使用者定义")  # 第二个中文概念首次标注
     assert not term_warnings(check(tmp_path, text))  # 目录与编号标题不算正文叙述
 

@@ -1146,7 +1146,8 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
 # 版式改为可直接导入语雀的纯 Markdown——
 #   * 无 frontmatter、无一级标题（文件名 <序号>-<主题>.md 即标题），首行即
 #     「> 核心主线：」引语块；元信息改由 --template v4 / --note-type / --meta 提供；
-#   * 列表用 `+`；`## 小节` 下一行紧接 **核心思想：**；
+#   * 列表用 `+`；`## N. 小节` 先场景/问题后结论，节末以「> **记住这个就够了**：」收尾
+#     （2026-11-07 起不再要求开头写 **核心思想：**，旧笔记写了也不报错）；
 #   * 概念卡「出现」写作「第 N 节「小节名」」；自测答案不折叠（禁 <details>）；
 #   * 视频时间索引为文末最后一节，不折叠、无 NAV 标记，条目「+ [mm:ss](URL) 标题」。
 # 分派：check_note_dispatch 收到 template="v4" 时路由到本节（不读 frontmatter）。
@@ -1159,7 +1160,12 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
 #   V4-NT    note_type 非 lecture/short                                    [error]
 #   V4-LIST  正文使用 - / * 列表（应为 +）                                 [warning]
 #   V4-SEC   小节实质内容 < 3 行                                           [error]
-#   V4-IDEA  小节未以 **核心思想：** 开头 [error]；标题与核心思想之间有空行 [warning]
+#   V4-IDEA  正文小节末尾缺「> **记住这个就够了**：<一句话>」收尾                [warning]
+#   V4-SUM   lecture 缺「## 本讲小结」；小结表数据行 < 2；缺「学完能说的 3 句话」或条目数 ≠ 3 [warning]
+#   V4-QA    自测题（面试速答）答案过短（< 40 字，应为结论→原因→例子的 2~6 句） [warning]
+#   V4-ANALOGY 类比标签不是「**打个比方：**」或「**打个比方（笔记补充）：**」     [warning]
+#   V4-YUQUE 语雀不兼容写法：mermaid 里 `subgraph 编号[标题]`（整图 Parse error）、
+#            ```text 代码块（被识别成 LaTeX，应写 ```plain）                     [warning]
 #   V4-E1    正文时刻禁令（仅「视频时间索引」节豁免，代码块内同样扫描）      [error]
 #   V4-E2    时间索引：lecture 必备、须为最后一节、禁 <details>/NAV 标记、
 #            ≥1 条目、条目时刻在转写稿白名单 [error]；条目标题不一致 [warning]
@@ -1194,6 +1200,21 @@ V4_H1_RE = re.compile(r"^#\s+\S")  # 一级标题行
 V4_MAIN_QUOTE_RE = re.compile(r"^>\s*核心主线[：:]")  # 首行引语「> 核心主线：」
 V4_FILENAME_RE = re.compile(r"^\d+(?:\.\d+)*-\S.*\.md$")  # <序号>-<主题>.md，序号可带小数点
 V4_DETAILS_RE = re.compile(r"<details\b", re.IGNORECASE)  # 折叠块开标签
+# v4 结构性小节：在 v3 豁免集合上加「本讲小结」（它不是正文小节，不要求收尾句）
+V4_STRUCT_SKIP = V3_IDEA_SKIP + ("本讲小结",)  # 仅 v4 使用，v3 规则不受影响
+# V4-IDEA：节末收尾引语，冒号可在加粗内或外：> **记住这个就够了**：… / > **记住这个就够了：**…
+V4_RECALL_RE = re.compile(r"^\s*>\s*\*\*记住这个就够了(?:\*\*\s*[：:]|[：:]\*\*)\s*\S")  # 冒号后须有正文
+V4_SUMMARY_HEADING = "本讲小结"  # V4-SUM：小结小节标题关键词
+V4_THREE_LINES_RE = re.compile(r"学完能说的\s*(?:3|三)\s*句话")  # V4-SUM：「学完能说的 3 句话」标记
+V4_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")  # V4-SUM：Markdown 表格行
+V4_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$")  # V4-SUM：表头分隔行
+V4_QA_MIN_CHARS = 40  # V4-QA：面试速答答案最少字数（去空白与加粗符号后）
+# V4-ANALOGY：类比标签行（可带 + / > 前缀）与两种合法写法
+V4_ANALOGY_LABEL_RE = re.compile(r"^\s*(?:[+>]\s*)?\*\*打个比方")  # 以加粗「打个比方」开头的行
+V4_ANALOGY_OK_RE = re.compile(r"^\s*(?:[+>]\s*)?\*\*打个比方(?:（笔记补充）)?(?:[：:]\*\*|\*\*\s*[：:])")  # 讲者原话 / 笔记补充
+# V4-YUQUE：语雀不兼容的两种写法（2026-11-07 在语雀实测）
+V4_YUQUE_SUBGRAPH_RE = re.compile(r"^\s*subgraph\s+[^\s\[]+\s*\[")  # subgraph 编号[标题]：语雀 Mermaid 报 Parse error
+V4_YUQUE_TEXT_FENCE_RE = re.compile(r"^\s*```\s*text\s*$")  # ```text：语雀识别成 latex 代码块
 
 
 def parse_concept_cards_v4(lines: list[str], start: int, end: int,
@@ -1284,7 +1305,7 @@ def v4_parse_km(lines: list[str], start: int, end: int) -> dict:
         j += 1  # 前进（放在前面，下面可以直接 continue）
         if not line or line.startswith("%%") or V2_MERMAID_FIRST_RE.match(line) or line == "end":  # 空行/注释/图类型/分组结束
             continue  # 跳过
-        if V4_KM_SUBGRAPH_RE.match(line):  # subgraph S1[分组名]
+        if V4_KM_SUBGRAPH_RE.match(line):  # subgraph 分组名（旧写法 subgraph S1[分组名] 也能解析）
             sm = V4_KM_NODE_LABEL_RE.search(line)  # 取分组标题
             out["subgraphs"].append(sm.group(1).strip() if sm else line[8:].strip())  # 无方括号时取 subgraph 后的文本
             continue  # 分组行不算节点
@@ -1469,22 +1490,43 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
     checks["section_content"] = {"passed": not any(e["check"] == "V4-SEC" for e in errors),
                                  "lines_per_section": sec_detail}  # 明细
 
-    # ---- V4-IDEA：正文小节以 **核心思想：** 开头，且紧贴标题（不空行） ----
-    idea_missing: list[str] = []  # 缺核心思想的小节
+    # ---- V4-IDEA：正文小节先场景/问题、后结论，节末以「> **记住这个就够了**：」收尾 [warning] ----
+    recall_missing: list[str] = []  # 缺收尾句的小节
     for i, line in enumerate(lines):  # 按行找小节标题（需要行号）
         hm = H2_RE.match(line)  # ## 标题
-        if not hm or fence_state[i] or any(k in hm.group(1) for k in V3_IDEA_SKIP):  # 非正文小节
+        if not hm or fence_state[i] or any(k in hm.group(1) for k in V4_STRUCT_SKIP):  # 非正文小节
             continue  # 跳过
         end = next_h2_after(lines, i + 1)  # 本节结束
         subs = [j for j in range(i + 1, end)  # 本节实质内容行号
                 if lines[j].strip() and lines[j].strip() != "---"]  # 去空行与分隔线
-        if not subs or not lines[subs[0]].startswith("**核心思想：**"):  # 首行不是核心思想
-            idea_missing.append(hm.group(1))  # 记录
-            err("V4-IDEA", f"小节「{hm.group(1)}」未以「**核心思想：** <一句话>」开头", i + 1)  # 报错
-        elif subs[0] != i + 1:  # 核心思想与标题之间有空行
-            warn("V4-IDEA", f"小节「{hm.group(1)}」标题与「**核心思想：**」之间有空行"
-                            "（v4 版式：核心思想紧贴标题下一行）", i + 1)  # 提示
-    checks["core_idea"] = {"passed": not idea_missing, "missing": idea_missing}  # 明细
+        if not subs or not V4_RECALL_RE.match(lines[subs[-1]]):  # 最后一行不是收尾引语
+            recall_missing.append(hm.group(1))  # 记录
+            warn("V4-IDEA", f"小节「{hm.group(1)}」末尾缺少「> **记住这个就够了**：<一句话结论>」收尾"
+                            "（结论放节末，小节开头先写场景或问题）", i + 1)  # 提示
+    checks["section_recall"] = {"passed": not recall_missing, "missing": recall_missing}  # 明细
+
+    # ---- V4-ANALOGY：类比标签只允许讲者原话与笔记补充两种写法 [warning] ----
+    analogy_bad: list[int] = []  # 写法不合规的行号
+    for i, line in enumerate(lines):  # 逐行扫描
+        if i in exempt or fence_state[i]:  # 时间索引与代码块不查
+            continue  # 跳过
+        if V4_ANALOGY_LABEL_RE.match(line) and not V4_ANALOGY_OK_RE.match(line):  # 有标签但写法不对
+            analogy_bad.append(i + 1)  # 记录
+            warn("V4-ANALOGY", f"第{i + 1}行类比标签应写成「**打个比方：**」（讲者原话）或"
+                               "「**打个比方（笔记补充）：**」（笔记自己补的）", i + 1)  # 提示
+    checks["analogy_label"] = {"passed": not analogy_bad, "lines": analogy_bad}  # 明细
+
+    # ---- V4-YUQUE：语雀不兼容写法（导入后图报错 / 代码块变 LaTeX）[warning] ----
+    yuque_bad: list[int] = []  # 命中行号
+    for i, line in enumerate(lines):  # 逐行扫描（子图行在代码块内，所以不跳过代码块）
+        if fence_state[i] and V4_YUQUE_SUBGRAPH_RE.match(line):  # mermaid 里的 subgraph 编号[标题]
+            yuque_bad.append(i + 1)  # 记录
+            warn("V4-YUQUE", f"第{i + 1}行子图写成了「subgraph 编号[标题]」，语雀会整图报 Parse error；"
+                             "改成「subgraph 分组名」（分组名不含空格、括号）", i + 1)  # 提示
+        elif V4_YUQUE_TEXT_FENCE_RE.match(line):  # ```text 代码块开头
+            yuque_bad.append(i + 1)  # 记录
+            warn("V4-YUQUE", f"第{i + 1}行代码块语言写成了 text，语雀会识别成 LaTeX；纯文本代码块请写 ```plain", i + 1)  # 提示
+    checks["yuque_compat"] = {"passed": not yuque_bad, "lines": yuque_bad}  # 明细
 
     # ---- V4-E1：正文时刻禁令（仅时间索引节豁免；代码块内同样扫描） ----
     e1_hits: list[tuple[int, str]] = []  # 命中列表
@@ -1610,6 +1652,7 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
         checks["quiz_count"] = {"passed": want[0] <= n_q <= want[1], "count": n_q,
                                 "found": True}  # 明细
         fmt_ok = True  # 格式是否全部合规
+        qa_short: list[int] = []  # V4-QA：答案过短的题号
         for q in questions:  # 逐题检查
             if q["has_details"]:  # 使用了折叠
                 fmt_ok = False  # 不合规
@@ -1621,6 +1664,13 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
             elif q["extra_lines"] > 0:  # 答案超一行
                 warn("V4-E5", f"自测题 {q['no']} 的答案正文超过一行（答案后另有 "
                               f"{q['extra_lines']} 行非空文本）", q["line"])  # 提示
+            if q["has_answer"]:  # 有答案时检查面试速答长度
+                answer_text = V2_ANSWER_RE.match(q["answer_raw"][0]).group(1)  # 答案首行去掉「**答案：**」
+                answer_len = len(re.sub(r"[\s*`]", "", answer_text))  # 去空白、加粗与行内代码符号后计字
+                if answer_len < V4_QA_MIN_CHARS:  # 太短，不像结论→原因→例子
+                    qa_short.append(q["no"])  # 记录题号
+                    warn("V4-QA", f"自测题 {q['no']} 的答案只有 {answer_len} 字：面试速答应为一段 2~6 句，"
+                                  "先说结论、再说原因、最后举例，并联系相关小节", q["line"])  # 提示
             for ln in q["answer_raw"]:  # 答案时刻扫描
                 ts = V3_TS_ANY_RE.search(ln)  # 任意时刻变体
                 if ts:  # 含时刻
@@ -1639,6 +1689,38 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
                     err("V4-E5", f"自测题 {q['no']} 的「（对应：{q['correspond']}）」"
                                  "不存在于概念卡片集合，疑为笔误", q["line"])  # 报错
         checks["quiz_format"] = {"passed": fmt_ok, "count": n_q, "found": True}  # 明细
+        checks["quiz_answer_length"] = {"passed": not qa_short, "short": qa_short}  # V4-QA 明细
+
+    # ---- V4-SUM：本讲小结（lecture 必备）= 小结表 + 「学完能说的 3 句话」恰好 3 条 [warning] ----
+    sum_problems: list[str] = []  # 本项问题
+    sum_head = find_h2_line(lines, V4_SUMMARY_HEADING)  # 「## 本讲小结」行号
+    if sum_head is None:  # 没有小结
+        if nt == "lecture":  # 只有 lecture 要求
+            sum_problems.append("missing")  # 记录
+            warn("V4-SUM", "缺少「## 本讲小结」（放在本讲知识地图之后：机制/概念 | 解决什么问题 | 一句话 "
+                           "表格 + 学完能说的 3 句话）")  # 提示
+    else:  # 有小结（short 写了也按同样格式检查）
+        sum_end = next_h2_after(lines, sum_head + 1)  # 小结节结束
+        rows = [j for j in range(sum_head + 1, sum_end)  # 小结内的表格行
+                if not fence_state[j] and V4_TABLE_ROW_RE.match(lines[j])]  # 代码块外
+        data_rows = [j for j in rows if not V4_TABLE_SEP_RE.match(lines[j])][1:]  # 去分隔行与表头
+        if len(data_rows) < 2:  # 至少两行机制
+            sum_problems.append("table")  # 记录
+            warn("V4-SUM", f"「本讲小结」表格只有 {len(data_rows)} 行数据，至少 2 行"
+                           "（列：机制/概念 | 解决什么问题 | 一句话）", sum_head + 1)  # 提示
+        mark = next((j for j in range(sum_head + 1, sum_end)  # 「学完能说的 3 句话」所在行
+                     if not fence_state[j] and V4_THREE_LINES_RE.search(lines[j])), None)  # 代码块外
+        if mark is None:  # 缺标记
+            sum_problems.append("three")  # 记录
+            warn("V4-SUM", "「本讲小结」缺少「**学完能说的 3 句话：**」及其 3 条编号句子", sum_head + 1)  # 提示
+        else:  # 有标记，数编号条目
+            items = [j for j in range(mark + 1, sum_end)  # 标记之后的编号行
+                     if not fence_state[j] and NUM_ITEM_RE.match(lines[j])]  # 代码块外
+            if len(items) != 3:  # 不是恰好 3 条
+                sum_problems.append("three_count")  # 记录
+                warn("V4-SUM", f"「学完能说的 3 句话」下有 {len(items)} 条编号句子，应恰好 3 条", mark + 1)  # 提示
+    checks["summary"] = {"passed": not sum_problems, "found": sum_head is not None,
+                         "problems": sum_problems}  # 明细
 
     # ---- 转写稿时间行池（E2 白名单 + RATIO 共用） ----
     txt_files: list[Path] = sorted(Path(txt_dir).glob("*.txt")) if txt_dir else []  # 转写稿
@@ -1695,7 +1777,7 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
                                      "off_whitelist": off_whitelist}  # 明细
 
     body_titles = {v3_norm_title(t) for t, _ in sections  # 正文小节名集合
-                   if t and not any(k in t for k in V3_IDEA_SKIP)}  # 去结构性小节
+                   if t and not any(k in t for k in V4_STRUCT_SKIP)}  # 去结构性小节（含本讲小结）
     title_warns = 0  # 不一致计数
     for e in entries:  # 逐条
         if v3_norm_title(e["title"]) not in body_titles:  # 标题不一致
@@ -1797,7 +1879,7 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
                     err("V4-KM-REL", f"知识地图只有 {km['labeled_edges']} 条带标签的关系边，至少需要 {need_edges} 条"
                                      "（写法 A -->|依赖| B、A -.->|易混| B；地图要表达概念之间的关系，不是目录树）")  # 报错
                 sec_norm = {v4_km_norm(v3_norm_title(t)) for t, _ in sections  # 正文小节名（归一化）
-                            if t and not any(k in t for k in V3_IDEA_SKIP)}  # 去结构性小节
+                            if t and not any(k in t for k in V4_STRUCT_SKIP)}  # 去结构性小节（含本讲小结）
                 card_norm = {v4_km_norm(c) for c in card_names}  # 概念卡名（归一化）
                 toc_hits = sum(1 for nl in norm_labels if nl in sec_norm and nl not in card_norm)  # 等于小节名、又不是概念卡的节点数（小节本就以概念命名时不算复刻）
                 if norm_labels and sec_norm and toc_hits >= max(2, V4_KM_TOC_RATIO * len(sec_norm)):  # 大面积重合
