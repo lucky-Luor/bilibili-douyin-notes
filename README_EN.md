@@ -19,7 +19,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 > 💬 Just tell your AI agent "make lecture notes from this video: <Bilibili / Douyin / YouTube / Xiaohongshu link>" and you get notes like this 👇
 > (Examples in Chinese: [Hung-yi Lee ML course · Local Minima & Saddle Points](examples/01-局部最小值与鞍点.md); [Khan microeconomics · first 15 lessons](examples/可汗微观经济学-前15集/课程索引.md))
 
-<p align="center"><img src="docs/images/note-preview.png" alt="Note preview" width="760"></p>
+<p align="center"><a href="examples/01-局部最小值与鞍点.md"><img src="docs/images/note-preview.png" alt="Note preview: lecture-style body, concept map and lesson summary (click for the full example)" width="760"></a></p>
 
 > 📜 **Personal study only**: public videos only, everything runs locally, no data collected; do not use it to redistribute or for commercial purposes. See [Usage Notice & Data Flow](#-usage-notice--data-flow).
 

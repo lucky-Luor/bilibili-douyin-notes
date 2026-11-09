@@ -19,7 +19,7 @@
 > 💬 对 AI 说一句「帮我把这个视频做成课堂笔记：<B站/抖音/YouTube/小红书链接>」，就能得到下面这样的笔记 👇
 > （完整示例：[李宏毅机器学习 · 局部最小值与鞍点](examples/01-局部最小值与鞍点.md)；课程节选：[可汗微观经济学 · 前15集](examples/可汗微观经济学-前15集/课程索引.md)）
 
-<p align="center"><img src="docs/images/note-preview.png" alt="课堂笔记效果预览" width="760"></p>
+<p align="center"><a href="examples/01-局部最小值与鞍点.md"><img src="docs/images/note-preview.png" alt="课堂笔记效果预览：讲解体正文、知识地图与本讲小结（点击查看完整示例）" width="760"></a></p>
 
 > 📜 **仅限个人学习使用**：只处理公开视频、全部在本机运行、不收集任何数据；请勿用于传播或商用。详见[使用声明与数据去向](#-使用声明与数据去向)。
 
