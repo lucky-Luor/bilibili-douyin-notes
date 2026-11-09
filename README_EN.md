@@ -19,7 +19,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 > 💬 Just tell your AI agent "make lecture notes from this video: <Bilibili / Douyin / YouTube / Xiaohongshu link>" and you get notes like this 👇
 > (Examples in Chinese: [Hung-yi Lee ML course · Local Minima & Saddle Points](examples/01-局部最小值与鞍点.md); [Khan microeconomics · first 15 lessons](examples/可汗微观经济学-前15集/课程索引.md))
 
-<p align="center"><img src="docs/images/note-preview.png" alt="Note preview" width="760"></p>
+<p align="center"><a href="examples/01-局部最小值与鞍点.md"><img src="docs/images/note-preview.png" alt="Note preview: lecture-style body, concept map and lesson summary (click for the full example)" width="760"></a></p>
 
 > 📜 **Personal study only**: public videos only, everything runs locally, no data collected; do not use it to redistribute or for commercial purposes. See [Usage Notice & Data Flow](#-usage-notice--data-flow).
 
@@ -35,7 +35,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 - **Key-frame screenshots**: anchored on transcript timestamps and extracted with PyAV; a local quality check flags black / blank / blurry frames (white-background slides are not misjudged), and the agent makes the final visual call
 - **Douyin without login**: accesses public videos as a guest, no account cookie needed; the video is used only for local transcription and can be cleaned up afterwards
 - **Xiaohongshu without login**: parses the data embedded in the share page and downloads video notes directly — no signature, no account (video notes only; image notes and comments are not supported)
-- **Lecture-note templates**: sections, bolded key terms, real code references, a concept map, concept cards, self-test questions, and an unfolded video time index with deep links; v4 targets Yuque imports, while v4-obsidian adds frontmatter and a Wiki-link table of contents
+- **Lecture-note templates**: lecture-style body (each section opens with a scenario or question, develops in paragraphs, and closes with a "remember this" takeaway), bolded key terms, real code references, a concept map, a lesson summary, concept cards, interview-style self-test questions, and an unfolded video time index with deep links; v4 targets Yuque imports, while v4-obsidian adds frontmatter and a Wiki-link table of contents
 - **Original-language terms**: English courses produce Chinese notes with **中文（Original）** at each term's first appearance and an original-term field on Chinese concept cards
 
 ## 🧩 Workflow
@@ -126,6 +126,8 @@ ASR tuning: `asr_model` (tiny ~ large-v3, falls back one size automatically on f
 
 `config.note_template` sets the default (`v4` / `v4-obsidian`); a course can explicitly select one with `start --template`. v4 keeps the frontmatter-free Yuque format. v4-obsidian adds frontmatter and uses `+ [[#Exact body heading]]` entries in the table of contents; the body, concept cards, questions and time-index rules remain the same. See the [note template](references/note-template.md) for the full specification.
 
+Notes use a lecture-style body: the opening quote states the lesson goals, a lesson summary follows the concept map, and each self-test answer is one paragraph running from conclusion to reason to example. The quality gate reports these newer conventions as warnings; existing error rules are unchanged, so older notes do not start failing. For Yuque imports, write concept-map subgraphs as `subgraph group-name` (no ID or brackets) and label plain-text code blocks `plain` rather than `text`.
+
 For Bilibili titles that clearly suggest an English-original course (Lecture / MIT / Stanford / CS61A) without Chinese-subtitle, bilingual or dubbing markers (`中字` / `中英` / `配音`), the agent asks whether to transcribe in English first. YouTube defaults to original-language manual captions → Chinese manual captions → original-language auto captions → existing fallbacks; an explicit `--lang` overrides that language priority. Use `audio_lang` / `subtitle_lang` to determine the course language. For English courses, write Chinese prose with **中文（Original）** at each term's first appearance and Chinese concept-card names with `+ 原文：Original`. Originally Chinese courses and cards named with an untranslated foreign proper name do not need that field.
 
 ## 🚀 Usage
@@ -167,7 +169,7 @@ Multipart videos default to the current video; expand a collection with `--scope
 
 The course model and CLI are implemented and available locally. Run the commands from the project root after at least one episode is done. Review reads existing notes, adds no dependencies, and accepts existing `course.json` files.
 
-The full offline suite and UTF-8 run each passed 854 tests with 5 skipped. Programmatic acceptance passed on 15 real lessons. The synthetic 40-note performance case took about 0.09 seconds; 40 real lessons were not tested, following the user's decision to accept 15. See the [I5 verification record](docs/verification/I5-概念表.md) for results and outstanding checks.
+The full offline suite and UTF-8 run currently each pass 869 tests; at I5 acceptance they passed 854 with 5 skipped. Programmatic acceptance passed on 15 real lessons. The synthetic 40-note performance case took about 0.09 seconds; 40 real lessons were not tested, following the user's decision to accept 15. See the [I5 verification record](docs/verification/I5-概念表.md) for results and outstanding checks.
 
 ```bash
 python scripts/course_plan.py concepts "<course root>" # 生成或刷新概念表.md、课程自测.md
