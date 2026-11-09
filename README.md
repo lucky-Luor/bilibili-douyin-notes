@@ -35,7 +35,7 @@
 - **重点截图**：按转写稿时间戳锚点 + PyAV 抽帧，本地画质初筛自动**校验并标记**黑屏/空屏/模糊帧（像素占比法，白底 PPT 不误判），最终由 Agent 视觉复核决定取舍；无硬编码锚点时自动从文稿提取关键词
 - **抖音免登录**：游客身份访问公开视频，无需账号 Cookie；视频只用于本地转写，用完可清理
 - **小红书免登录**：解析分享页内嵌数据直接下载视频笔记，无签名、无需账号（仅支持视频笔记，不支持图文与评论）
-- **课堂笔记模板**：小节结构 + 关键术语加粗 + 真实代码引用 + 知识地图 + 概念卡片 + 自测题，文末附可回看跳转的视频时间索引；v4 用于语雀直导，v4-obsidian 提供 frontmatter 与 Wiki 目录
+- **课堂笔记模板**：讲解体正文（小节先抛场景或问题，以段落展开，节末用“记住这个就够了”收尾）+ 关键术语加粗 + 真实代码引用 + 知识地图 + 本讲小结 + 概念卡片 + 自测题（面试速答），文末附可回看跳转的视频时间索引；v4 用于语雀直导，v4-obsidian 提供 frontmatter 与 Wiki 目录
 - **原语言术语**：英文课用中文整理，正文首次出现术语保留 **中文（Original）**，中文概念卡附原文，便于对照原课
 
 ## 🧩 工作流程
@@ -179,6 +179,8 @@ CPU 转写慢时可在 config.json 调整：`asr_model`（tiny~large-v3，高阶
 
 `config.note_template` 指定默认模板（`v4` / `v4-obsidian`），课程也可在 `start --template` 显式选择。v4 保持无 frontmatter 的语雀直导格式；v4-obsidian 增加元信息，并用 `+ [[#精确正文标题]]` 生成目录，其它正文、概念卡、自测题和时间索引规则相同。完整规范见 [笔记模板](references/note-template.md)。
 
+正文采用讲解体，开头引语块写明本讲目标，知识地图后附“本讲小结”，自测题答案按“结论 → 原因 → 例子”写成一段。这些新写法由门禁给出 warning 提示；原有 error 规则不变，旧笔记不会因此无法通过。为兼容语雀导入，知识地图子图写成 `subgraph 分组名`（不带编号和方括号），纯文本代码块的语言标注用 `plain`（不用 `text`）。
+
 B站标题明显是英文原声课（如 Lecture / MIT / Stanford / CS61A），又没有“中字 / 中英 / 配音”等提示时，Agent 会先问是否按英文转写。YouTube 默认选择原语言人工字幕 → 中文人工字幕 → 原语言自动字幕 → 原有兜底，显式 `--lang` 可覆盖默认语言优先级。结合 `audio_lang` / `subtitle_lang` 判断课程语言；英文课正文首次出现术语写 **中文（Original）**，中文概念卡加 `+ 原文：Original`，原本中文课程或纯外文专名卡名免加原文行。
 
 ## 🚀 使用
@@ -222,7 +224,7 @@ python scripts/course_plan.py status "<课程目录>"
 
 课程模型与 CLI 已在本地实现可用。已有课程至少完成一集后，在项目根目录执行；复习不新增依赖，只读取原笔记，兼容已有 `course.json`。
 
-本地完整离线测试与 UTF-8 模式均为 854 项通过、5 项跳过；15 集程序验收通过。40 篇离线性能用例耗时约 0.09 秒；40 集未实测，按用户决定以 15 集验收。详细结果与待完成项目见 [I5 验收记录](docs/verification/I5-概念表.md)。
+当前完整离线测试与 UTF-8 模式均为 869 项通过；I5 验收时为 854 项通过、5 项跳过。15 集程序验收通过。40 篇离线性能用例耗时约 0.09 秒；40 集未实测，按用户决定以 15 集验收。详细结果与待完成项目见 [I5 验收记录](docs/verification/I5-概念表.md)。
 
 ```bash
 python scripts/course_plan.py concepts "<课程目录>" # 生成或刷新概念表.md、课程自测.md
@@ -282,10 +284,11 @@ python scripts/upload_images.py "<笔记.md>" --apply
 ## 📁 目录结构
 
 ```
-├── SKILL.md               # Agent Skills 规范定义：触发条件、三步工作流程、笔记模板
+├── SKILL.md               # Agent Skills 规范定义：触发条件、工作流程（含整门课与复习模式）、笔记模板
 ├── scripts/
 │   ├── doctor.py          # 环境自检：依赖 / 模型 / 设备 / 编码 / 加密软件 / 网络风控
 │   ├── course_plan.py     # 整门课规划、续跑复查、课程索引、回执与询问式清理
+│   ├── course_review.py   # 课程概念表与课程自测：跨集解析、合并与检查
 │   ├── bili_fetch.py      # B站：元数据 + 字幕抓取（--probe 只探元数据）
 │   ├── douyin_fetch.py    # 抖音：元数据 + 视频下载供转写（游客身份）
 │   ├── yt_fetch.py        # YouTube：元数据 + 字幕三级回退（无字幕按需下载音频）
@@ -298,16 +301,26 @@ python scripts/upload_images.py "<笔记.md>" --apply
 │   ├── note_nav.py        # 时间索引深链填充
 │   ├── clean_media.py     # 询问式媒体清理（默认只列清单、--apply 实删）
 │   ├── validate_note.py   # 笔记质量门禁（errors 为 0 才交付）
+│   ├── smoke_local.py     # 本机定时冒烟：拉最新代码、跑真实链接探针、存报告
+│   ├── smoke_probe.py     # 真实链接冒烟探针（只取元数据和字幕，不下载视频）
+│   ├── asr_bench.py       # 语音识别基准：对比模型 / 线程数 / 批大小的耗时与一致度
+│   ├── _hints.py          # 统一失败提示：原因 / 影响 / 下一步
+│   ├── _net.py            # 公共 HTTP 请求：只重试网络类错误，4xx 直接提示
+│   ├── _pyav_compat.py    # faster-whisper 与新版 PyAV 的兼容层
 │   ├── ensure_abogus.py   # abogus.py 缺失时从上游固定 commit 下载（SHA-256 校验）
 │   └── abogus.py          # 抖音 a_bogus 签名算法（GPLv3，按需下载，不入仓库）
 ├── tests/                 # 离线 pytest 测试（不联网、无需重依赖）
 ├── examples/              # 单篇样例与可汗微观经济学前15集节选
-├── docs/images/           # README 配图
+├── docs/
+│   ├── images/            # README 配图
+│   ├── dev/               # 开发文档：冒烟、错误分支清单、复习版内测说明
+│   └── verification/      # 各迭代验收记录
 ├── references/
 │   ├── anchors.json       # 截图关键词锚点表（按视频 ID 隔离，仅在不用 --shots 清单时兜底）
 │   ├── asr-glossary.json  # ASR 技术术语校正表
 │   ├── glossary-user.example.json  # 用户层词表示例
-│   └── note-template.md   # 课堂笔记模板
+│   ├── smoke_urls.json    # 冒烟测试链接清单
+│   └── note-template.md   # 课堂笔记模板（v4 / v4-obsidian 规范）
 ├── config.example.json    # 配置模板（SESSDATA）
 └── LICENSE                # MIT
 ```
