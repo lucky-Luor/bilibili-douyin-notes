@@ -611,6 +611,14 @@ def _note_path(root, course, item):  # 默认按讲义编号命名并对重复�
     return candidate  # 只有确认没有占用的路径才交给 Agent
 
 
+def course_note_type(metadata):  # 课程模式不用轻量 brief：抓取建议为 brief 时改按 short
+    try:  # 元数据缺失或损坏时不覆盖类型，交给门禁原有报错
+        suggested = json.loads(Path(metadata).read_text(encoding="utf-8")).get("suggested_note_type")  # 抓取脚本给的建议类型
+    except (OSError, ValueError, AttributeError):  # 读不到、不是 JSON 或不是对象
+        return None  # 不干预
+    return "short" if suggested == "brief" else None  # 只拦 brief，其余沿用元数据
+
+
 def run_gate(root, course, item):  # 进程内执行本集笔记门禁并返回摘要
     import validate_note  # 惰性加载现有门禁而不创建子进程
     root = Path(root)  # 统一业务路径类型
@@ -625,7 +633,7 @@ def run_gate(root, course, item):  # 进程内执行本集笔记门禁并返回�
             return result  # 不调用缺少输入的校验器
         raw = note.read_bytes()  # 摘要严格基于文件原始UTF8字节
         language_options = {"source_lang": course["asr_lang"]} if course.get("asr_lang") else {}  # 非空课程语言显式转发且旧调用不增加参数
-        report = validate_note.check_note_dispatch(raw.decode("utf-8"), note, meta_path=metadata, txt_dir=folder, only_page=item["page"], template=result["template"], note_type=None, **language_options)  # 无显式语言时由目标分集元数据回退
+        report = validate_note.check_note_dispatch(raw.decode("utf-8"), note, meta_path=metadata, txt_dir=folder, only_page=item["page"], template=result["template"], note_type=course_note_type(metadata), **language_options)  # 无显式语言时由目标分集元数据回退
         result.update(errors=len(report["errors"]), warnings=len(report["warnings"]), sha256=hashlib.sha256(raw).hexdigest(), first_errors=[f"{error['check']}: {error['message']}" for error in report["errors"][:3]])  # 保存计数和最多三条首错
     except (OSError, ValueError, TypeError, KeyError) as exc:  # 读取或路径问题也必须阻止完成而非泄漏内部异常
         result.update(errors=1, first_errors=[f"GATE: 无法检查笔记：{exc}"])  # 明确门禁失败原因供恢复使用
@@ -719,6 +727,9 @@ def course_next(root):  # 交出一集的执行步骤而不执行抓取或模型
     template = course.get("template", "v4")  # 缺字段旧课程继续采用四版
     common = [note, "--meta", metadata, "--txt-dir", folder, "--page", item["page"], "--template", template]  # 导航与门禁共用课程模板及页码
     nav, validate = script_argv("note_nav.py", *common), script_argv("validate_note.py", *common)  # 按先导航后最终门禁顺序执行
+    if course_note_type(metadata):  # 抓取建议为 brief 时课程仍按 short 制作
+        nav.extend(["--note-type", "short"])  # 导航与门禁口径一致
+        validate.extend(["--note-type", "short"])  # 门禁不跑 brief 分支
     if course.get("asr_lang") not in (None, "zh"):  # 外语与自动模式显式交给术语门禁
         validate.extend(["--source-lang", course["asr_lang"]])  # 导航器不接收语言参数
     steps = [  # 脚本不执行这些命令，交给 Agent 串行处理

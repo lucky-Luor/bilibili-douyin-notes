@@ -105,7 +105,7 @@ def test_safe_name():
 # ---------- note_type_for（规格 §4.4 坑③：metadata.suggested_note_type） ----------
 
 def test_note_type_short_for_short_single_page():
-    assert douyin_fetch.note_type_for(300, 1) == "short"
+    assert douyin_fetch.note_type_for(301, 1) == "short"  # 300 秒以上、600 秒以内仍是 short（≤300 秒改为 brief）
 
 
 def test_note_type_lecture_for_long_or_multi_page():

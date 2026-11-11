@@ -195,8 +195,10 @@ def safe_name(name: str) -> str:
 
 
 def note_type_for(duration_sec, page_count) -> str:
-    """建议笔记型别：与 bili_fetch / douyin_fetch 同一套判据（≤600s 且单分P → short）。"""
-    return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"  # 判据
+    """建议笔记型别：与 douyin_fetch 同一套判据（单分P且 ≤300s → brief，≤600s → short，否则 lecture）。"""
+    if int(page_count) == 1 and int(duration_sec) <= 300:  # 几分钟的短视频 → 轻量笔记
+        return "brief"  # 轻量笔记
+    return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"  # 原有两档判据
 
 
 def duration_of(note: dict) -> int:

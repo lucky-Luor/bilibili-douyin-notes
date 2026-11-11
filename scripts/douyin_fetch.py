@@ -257,11 +257,13 @@ def safe_name(name: str) -> str:
 
 
 def note_type_for(duration_sec, page_count) -> str:
-    """建议笔记型别（判据见 references/note-template.md）：short 当且仅当
-    总时长 ≤600s 且 分P数 == 1，否则 lecture。分P数只做 tiebreak，不作主判据。
-    脚本只给建议，Agent 可在笔记 frontmatter 的 note_type 覆盖，门禁只读 frontmatter。
-    （与 bili_fetch.note_type_for 同一套判据，抖音视频恒为单分P。）"""
-    return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"
+    """建议笔记型别（判据见 references/note-template.md）：单分P且 ≤300s → brief（轻量），
+    ≤600s → short，否则 lecture。分P数只做 tiebreak，不作主判据。
+    脚本只给建议，Agent 可用 --note-type 覆盖。
+    （brief 只对抖音 / 小红书自动建议；bili_fetch / yt_fetch 仍是 short / lecture 两档。）"""
+    if int(page_count) == 1 and int(duration_sec) <= 300:  # 几分钟的短视频 → 轻量笔记
+        return "brief"  # 轻量笔记
+    return "short" if (int(duration_sec) <= 600 and int(page_count) == 1) else "lecture"  # 原有两档判据
 
 
 def main():
