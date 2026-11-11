@@ -9,6 +9,7 @@
 选项:
     --shots        截图清单（推荐）：Agent 写完正文后按小节产出，脚本逐条抽帧，
                    格式见下方「截图清单」；给了清单就不再走关键词锚点。
+    --candidates   只为清单里写了 range 的条目生成候选网格（见下方 range），不出最终截图。
     --ascii-names  把中文锚点 label 转写为 zh-<md5(关键词)前6位>，文件名全 ASCII
                    （英文 label 不变）；默认关闭，保留中文文件名。
 
@@ -18,6 +19,15 @@
     - page    分P号（单P视频写 1）；section 笔记里 `## N.` 小节号（门禁据此校验位置）
     - t       该分P转写稿里真实存在的时刻 mm:ss（±5s 容差，否则该条进 failed）
     - caption 图注，笔记里 alt 文本须以它开头；name 可选，文件名用（缺省取 caption）
+    - range   （推荐）该小节在转写稿里的讲解时间段 ["mm:ss", "mm:ss"]，两端都须是转写稿真实时间行（±5s）；
+              写了 range 的条目走“候选网格”两步：
+              ① 加 --candidates 运行：每条在 <截图目录>/_candidates/ 生成带编号的候选网格
+                 p<页>_<label>.jpg（各画面段写完、没被挡住的代表帧，有 t 时再加按 t 截的一帧），
+                 编号与时刻记在 _candidates/candidates.json；这一步不出最终截图
+              ② Agent 看网格，在该条写 "pick": <编号>（都不合适就删掉这条），再不带 --candidates 运行，
+                 按编号取原图落盘。range 条目没有 pick 不出图（进 failed，reason=need_pick）
+              有 range 时 t 可省；只写 t 的条目仍按原流程（t 往后 3 张候选择优）
+    - pick    候选网格编号（1 起）
     输出文件名 p<页>_s<小节>_<name>.png。
 
 原理:
@@ -134,9 +144,17 @@ def load_shots(path: Path) -> dict[int, list[dict]]:
         name = str(it.get("name") or caption or "shot").strip()  # 文件名主体
         label = f"s{section}_{safe_name(name)}" if section is not None else safe_name(name)  # 带小节前缀
         label = re.sub(r"\s+", "-", label)  # 文件名去空白
+        raw_range = it.get("range")  # 讲解时间段原文（可选）
+        rng = None  # 解析后的 (起, 止) 秒
+        if isinstance(raw_range, (list, tuple)) and len(raw_range) == 2:  # 两端齐全
+            a, b = parse_mmss(str(raw_range[0])), parse_mmss(str(raw_range[1]))  # 解析两端
+            rng = (a, b) if a is not None and b is not None and a <= b else None  # 非法记为 None
+        pick = it.get("pick")  # 候选网格编号（可选）
         out.setdefault(page, []).append({  # 按分P收集
             "label": label, "keyword": caption, "caption": caption,  # 清单模式 keyword 即图注
             "t": parse_mmss(it.get("t", "")), "raw_t": it.get("t"),  # 秒数与原文（报错用）
+            "range": rng, "raw_range": raw_range,  # 讲解时间段（秒）与原文
+            "pick": int(pick) if isinstance(pick, int) or (isinstance(pick, str) and pick.isdigit()) else None,  # 编号
             "section": int(section) if section is not None else None})  # 小节号
     return out  # 分组结果
 
@@ -415,6 +433,8 @@ def parse_args(argv=None):
                     help="中文锚点label转写为 zh-<md5前6位>，文件名全ASCII（默认保留中文）")
     ap.add_argument("--shots", type=Path, default=None,  # 截图清单（推荐）
                     help="截图清单 shots.json（按小节给出时刻与图注），给了就不走关键词锚点")
+    ap.add_argument("--candidates", action="store_true",  # 候选网格模式
+                    help="为清单里写了 range 的条目生成带编号的候选网格（_candidates/），不出最终截图")
     return ap.parse_args(argv)
 
 
@@ -439,6 +459,8 @@ ZERO_SHOT_HINTS = {  # 一张截图都没出时，按主要原因给出 (原因,
                   "按 SKILL.md 写 shots.json 清单，用 --shots 重跑"),
     "t_not_in_transcript": ("截图清单里的时刻都不在转写稿里（偏差超过 ±5 秒）",
                             "先 grep 转写稿确认真实时刻，改好 shots.json 后重跑"),
+    "need_pick": ("写了 range 的清单条目还没有选候选编号（或还没生成候选网格）",
+                  "先加 --candidates 运行生成候选网格，看图后在清单里写 pick 编号，再不带 --candidates 重跑"),
     "partial": ("所有截图时刻都取不到画面，或画面全部重复",
                 "确认视频能正常播放；换几个时刻后重跑"),
 }
@@ -451,7 +473,7 @@ def zero_shot_hint(page_status: dict, last_error) -> tuple:  # 0 张截图 → (
                 "检查传入的页码和 shots.json 里的 page", "")
     if last_error and all(st == "error" for st in page_status.values()):  # 全部整集失败
         return (last_error["reason"], impact, last_error["next_step"], "")  # 直接沿用单集失败的提示
-    for key in ("no_transcript", "no_anchor", "t_not_in_transcript", "partial"):  # 按优先级找主要原因
+    for key in ("no_transcript", "no_anchor", "need_pick", "t_not_in_transcript", "partial"):  # 按优先级找主要原因
         if key in page_status.values():  # 命中
             reason, next_step = ZERO_SHOT_HINTS[key]  # 取文案
             return (reason, impact, next_step, f"分P结果：{page_status}")  # 附各分P状态
@@ -498,6 +520,126 @@ def write_manifest(img_dir: Path, frames: list, failed: list, touched: set, summ
                      encoding="utf-8")
 
 
+CANDIDATES_DIR = "_candidates"  # 候选网格目录名（在截图目录下，不进笔记、不上传）
+
+
+def check_range(job: dict, legal: list[float]) -> str | None:
+    """清单条目 range 校验：两端都须是转写稿真实时间行（±SHOT_TS_TOLERANCE 秒）。合法返回 None，否则返回原因码。"""
+    if job["range"] is None:  # 格式不对（不是两个 mm:ss，或起点晚于终点）
+        return "range_invalid"  # 原因码
+    if not all(any(abs(x - lt) <= SHOT_TS_TOLERANCE for lt in legal) for x in job["range"]):  # 任一端不在转写稿里
+        return "range_not_in_transcript"  # 原因码
+    return None  # 合法
+
+
+def load_candidates(img_dir: Path) -> dict:
+    """读取 <截图目录>/_candidates/candidates.json：{"p01_<label>": {cands: [{no, t, src}], ...}}；没有则返回空字典。"""
+    path = img_dir / CANDIDATES_DIR / "candidates.json"  # 记录文件
+    try:  # 文件可能不存在或损坏
+        data = json.loads(path.read_text(encoding="utf-8"))  # 解析
+    except (OSError, ValueError):  # 读不到或不是 JSON
+        return {}  # 视为没有候选
+    return data if isinstance(data, dict) else {}  # 只接受对象
+
+
+def dedupe_keep_later(pool: list) -> list:
+    """候选去重：同一画面（dHash 接近且像素差小）只留时间较晚的一张（板书越写越全），结果按时间排序。"""
+    kept: list = []  # [(元数据, 图, 哈希)]
+    for meta_, img in sorted(pool, key=lambda x: x[0]["t"]):  # 按时间顺序处理
+        h = dhash(img)  # 感知哈希
+        dup = next((k for k, (_, im2, h2) in enumerate(kept)  # 已有候选里的同一画面
+                    if hamming(h, h2) <= DUP_HAMMING and frame_diff(img, im2) < DUP_DIFF), None)  # 两个条件同时满足才算重复
+        if dup is None:  # 新画面
+            kept.append((meta_, img, h))  # 保留
+        else:  # 同一画面
+            kept[dup] = (meta_, img, h)  # 换成较晚的一张
+    return [(m, im) for m, im, _ in kept]  # 去掉哈希
+
+
+def candidates_main(args, meta: dict, shots: dict, cookie: str, only_pages) -> None:
+    """候选网格模式：为写了 range 的清单条目生成带编号的网格与 candidates.json，不出最终截图。"""
+    import _frames  # 画面分析（惰性导入：numpy 为该模式必需）
+    img_dir = args.img_dir  # 截图目录
+    cand_dir = img_dir / CANDIDATES_DIR  # 候选目录
+    cand_dir.mkdir(parents=True, exist_ok=True)  # 创建
+    record = load_candidates(img_dir)  # 已有记录（多次运行累积，同一条目覆盖）
+    made, empty, all_failed, last_error = 0, 0, [], None  # 网格数、无内容节数、失败项、最近一次整集失败
+    for p in meta["pages"]:  # 逐个分P
+        page_no, part, cid = p["page"], p["part"], p.get("cid")  # 分P信息
+        if only_pages and page_no not in only_pages:  # 不在指定页码里
+            continue  # 跳过
+        jobs = [j for j in shots.get(page_no, []) if j["raw_range"] is not None]  # 只处理写了 range 的条目
+        if not jobs:  # 本分P没有候选条目
+            continue  # 跳过
+        txt_file = args.txt_dir / f"{page_no:02d}_{safe_name(part)}.txt"  # 转写稿
+        if not txt_file.exists():  # 缺转写稿
+            print(json.dumps({"page": page_no, "status": "no_transcript"}), flush=True)  # 进度
+            continue  # 下一个分P
+        legal = [t for t, _ in parse_ts_seconds(txt_file.read_text(encoding="utf-8"))]  # 转写稿真实时间行
+        failed = [{"page": page_no, "label": j["label"], "range": j["raw_range"], "reason": r}  # 时间段非法的条目
+                  for j in jobs if (r := check_range(j, legal))]  # 逐条校验
+        jobs = [j for j in jobs if check_range(j, legal) is None]  # 合法条目
+        all_failed.extend(failed)  # 汇总
+        if args.ascii_names:  # 需要 ASCII 文件名
+            for job in jobs:  # 逐个改写
+                job["label"] = ascii_label(job["label"])  # 只改 label
+        if not jobs:  # 全部非法
+            print(json.dumps({"page": page_no, "part": part, "candidates": [], "failed": failed,  # 进度
+                              "status": "range_not_in_transcript"}, ensure_ascii=True), flush=True)  # 状态
+            continue  # 下一个分P
+        local_media = p.get("media_path") and (args.meta.parent / p["media_path"])  # 抖音等已下载的本地视频
+        video = local_media if (local_media and local_media.exists()) else img_dir / f".video_{page_no:02d}.m4s"  # 视频路径
+        try:  # 单集失败不影响其它分P
+            if video is not local_media:  # 需要下载
+                download_video(meta["bvid"], cid, video, cookie)  # 480p 视频流
+            analysis = _frames.analyse_video(video)  # 整段画面分析（每秒 1 帧）
+            duration = float(p.get("duration") or 0)  # 分P时长
+            items = []  # 本分P进度
+            for job in jobs:  # 逐条清单
+                ra, rb = job["range"]  # 讲解时间段（秒）
+                cands = [{"t": c["t"], "src": "seg"} for c in analysis.candidates(ra, rb)]  # 各画面段代表帧
+                no_content = not cands  # 没有画面段候选 = 这一段没有可截的画面
+                pool = [(c, im) for c, im in zip(cands, grab_frames(video, [c["t"] for c in cands])) if im is not None]  # 取原图
+                if job["t"] is not None:  # 清单还写了 t：加一张按时刻择优的帧（原算法）
+                    ts = [x for x in (job["t"] + k * CAND_STEP for k in range(CAND_COUNT)) if duration <= 0 or x < duration - 1] or [job["t"]]  # 候选时刻
+                    got = pick_best(list(zip(ts, grab_frames(video, ts))))  # 择优
+                    if got is not None:  # 取到了
+                        pool.append(({"t": got[0], "src": "t"}, got[1]))  # 加入候选
+                kept = dedupe_keep_later(pool)  # 去重并按时间排序
+                key = f"p{page_no:02d}_{job['label']}"  # 记录键（与出图时的查找一致）
+                grid = f"{key}.jpg" if kept else None  # 网格文件名
+                if kept:  # 有候选
+                    _frames.make_grid([im for _, im in kept]).save(cand_dir / grid, quality=88)  # 拼网格落盘
+                record[key] = {"page": page_no, "section": job["section"], "label": job["label"],  # 记录
+                               "caption": job["caption"], "range": job["raw_range"], "no_content": no_content,  # 条目信息
+                               "grid": grid, "cands": [{"no": k, "t": round(m["t"], 1), "src": m["src"]}  # 编号 → 时刻
+                                                       for k, (m, _) in enumerate(kept, 1)]}  # 编号从 1 起
+                made += bool(kept)  # 计数
+                empty += no_content  # 计数
+                items.append({"label": job["label"], "grid": grid, "count": len(kept), "no_content": no_content})  # 进度
+            print(json.dumps({"page": page_no, "part": part, "candidates": items, "failed": failed,  # 进度
+                              "status": "candidates"}, ensure_ascii=True), flush=True)  # 状态
+        except Exception as e:  # 下载或解码失败
+            rec = failure_record(e, "这一集没有候选网格", f'python "{Path(__file__).resolve()}" "{args.meta}" "{args.txt_dir}" '  # 原因 / 影响 / 补跑
+                                 f'"{img_dir}" {page_no} --shots "{args.shots}" --candidates')  # 只补跑这一集
+            print(json.dumps({"page": page_no, "status": "error", **rec}, ensure_ascii=True), flush=True)  # 进度
+            last_error = rec  # 留给汇总
+        finally:  # 用完即删下载的视频
+            if video is not local_media:  # 不是本地已有视频
+                video.unlink(missing_ok=True)  # 删除
+    (cand_dir / "candidates.json").write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")  # 记录落盘
+    receipt = (f"候选网格 {made} 张（其中 {empty} 节判定没有可截的画面）；看图后在清单对应条目写 \"pick\": 编号，"  # 回执
+               "都不合适就删掉该条，再不带 --candidates 运行出图")  # 下一步
+    if all_failed:  # 有时间段非法的条目
+        receipt += f"；{len(all_failed)} 条 range 不在转写稿里，改正后重跑"  # 追加
+    print(receipt, file=sys.stderr, flush=True)  # 回执
+    if not made and not empty:  # 一张网格都没有，也不是因为“没有可截的画面”
+        if last_error:  # 整集失败
+            hint_exit(last_error["reason"], "没有生成候选网格", last_error["next_step"])  # 沿用单集提示
+        hint_exit("没有生成任何候选网格（清单里没有合法的 range 条目）", "没有生成候选网格",  # 原因 / 影响
+                  "检查 shots.json 里 range 的两端是否是转写稿里的真实时刻，改正后重跑")  # 下一步
+
+
 def main(argv=None):
     try:  # Agent 经管道调用时 stdout 可能是 gbk，emoji 标题会炸在最后一行 print
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -512,6 +654,11 @@ def main(argv=None):
     cookie = load_sessdata()
     video_id = meta.get("bvid") or meta.get("video_id")  # 各平台视频 ID（锚点表按它隔离）
     shots = load_shots(args.shots) if args.shots else None  # 清单模式：{页码: [任务]}
+    if args.candidates:  # 候选网格模式：只生成网格，不出最终截图
+        if shots is None:  # 没有清单
+            hint_exit("--candidates 需要配合 --shots 截图清单使用", "没有生成候选网格",  # 原因 / 影响
+                      "按 SKILL.md 写 shots.json（条目带 range），加 --shots 重跑")  # 下一步
+        return candidates_main(args, meta, shots, cookie, only_pages)  # 交给候选网格流程
     anchors = {} if shots is not None else load_anchors(video_id)  # 清单模式不查锚点表
     all_frames, all_failed, touched_pages = [], [], set()
     last_error = None  # 最近一次单集失败的结构化提示
@@ -534,7 +681,28 @@ def main(argv=None):
             if shots is not None:  # 清单模式：只处理清单里列出的分P
                 legal = [t for t, _ in lines]  # 转写稿真实时间行（秒）
                 jobs = []  # 本分P的截图任务
+                picks = load_candidates(img_dir)  # 候选网格记录（pick 用）
                 for job in shots.get(page_no, []):  # 逐条清单项
+                    if job["raw_range"] is not None:  # 候选网格条目：按 pick 编号取帧
+                        reason = check_range(job, legal)  # 时间段校验
+                        if reason is None:  # 时间段合法
+                            hit = picks.get(f"p{page_no:02d}_{job['label']}")  # 这条的候选记录
+                            if hit is None:  # 还没生成候选网格
+                                reason = "no_candidates"  # 先跑 --candidates
+                            elif job["pick"] is None:  # 没选编号
+                                reason = "need_pick"  # 看网格选编号
+                            else:  # 按编号取时刻
+                                chosen = next((c for c in hit["cands"] if c["no"] == job["pick"]), None)  # 选中的候选
+                                if chosen is None:  # 编号不存在
+                                    reason = "pick_not_found"  # 编号超出网格
+                                else:  # 命中
+                                    job["t"], job["fixed"] = chosen["t"], True  # 精确取这一帧，不再向后择优
+                        if reason is not None:  # 不能出图
+                            pre_failed.append({"page": page_no, "label": job["label"],  # 记录失败项
+                                               "t": job["raw_t"], "range": job["raw_range"], "reason": reason})  # 原因
+                        else:  # 可以出图
+                            jobs.append(job)  # 合法任务
+                        continue  # 下一条
                     t = job["t"]  # 清单时刻（秒）
                     if t is None or not any(abs(t - lt) <= SHOT_TS_TOLERANCE for lt in legal):  # 时刻非法或虚构
                         pre_failed.append({"page": page_no, "label": job["label"],  # 记录失败项
@@ -561,7 +729,8 @@ def main(argv=None):
                     print(json.dumps({"page": page_no, "part": part, "frames": [],  # 输出进度
                                       "failed": pre_failed, "duplicates": [], "status": "partial"},
                                      ensure_ascii=True), flush=True)  # 与正常进度同构
-                    page_status[page_no] = "t_not_in_transcript"  # 记录：清单时刻全部非法
+                    page_status[page_no] = ("need_pick" if all(f["reason"] in ("need_pick", "no_candidates") for f in pre_failed)  # 候选网格还没选
+                                            else "t_not_in_transcript")  # 记录：清单时刻全部非法
                     continue  # 下一个分P
                 print(json.dumps({"page": page_no, "status": "no_anchor"}), flush=True)
                 page_status[page_no] = "no_anchor"  # 记录：找不到截图时刻
@@ -582,7 +751,7 @@ def main(argv=None):
                     ts = [t0 + k * CAND_STEP for k in range(CAND_COUNT)]  # 向后等间隔
                     return [x for x in ts if duration <= 0 or x < duration - 1] or [t0]  # 不越过分P末尾
 
-                cand_lists = [cand_times(job["t"]) for job in jobs]  # 每个任务的候选时间
+                cand_lists = [[job["t"]] if job.get("fixed") else cand_times(job["t"]) for job in jobs]  # 已按编号选定的只取这一帧
                 flat = [x for ts in cand_lists for x in ts]  # 摊平后一次性抽帧
                 imgs = grab_frames(video, flat)  # 与 flat 等长，失败位为 None
                 results, failed, dups = [], list(pre_failed), []  # 成功 / 失败 / 重复
