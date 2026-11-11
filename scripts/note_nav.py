@@ -14,7 +14,8 @@ v1 / v2 的「参考时间戳」生成路径已移除，frontmatter 写其他版
       定位文末「## 视频时间索引」节，把节内无链接条目 `+ [mm:ss] 标题`
       原位重写为 `+ [mm:ss](URL) 标题`（列表符号原样保留，其余行不动）；
       note_type 取 --note-type > metadata.json 的 suggested_note_type > lecture，
-      short 跳过；找不到该节或节内无条目 → stderr warning、不改文件、退出 0；
+      short 跳过；brief 与 lecture 相同（有索引就填链）；找不到该节或节内无条目 →
+      stderr warning、不改文件、退出 0；
       分P归属、平台深链、幂等与原子写入同 v3。
     - v3 模式（frontmatter template_version=v3）：正文全面去时间戳，文末
       <details> 的「视频时间索引」由模型写好 NAV 标记对与无链接条目
@@ -252,7 +253,7 @@ def main(argv=None) -> int:
                          "（每选集一份笔记时必填，否则早分P同秒时间行抢先命中）")
     ap.add_argument("--template", choices=["v4", "v4-obsidian"], default=None,  # 导航支持显式选择新变体
                     help="模板版本：v4 或 v4-obsidian；省略时按元信息声明识别")  # 无元信息仍按四版
-    ap.add_argument("--note-type", choices=["lecture", "short"], default=None,
+    ap.add_argument("--note-type", choices=["lecture", "short", "brief"], default=None,  # brief 有索引就填链，没有就提示跳过
                     help="仅 v4：笔记类型；省略取 metadata.json 的 suggested_note_type")  # v4 的 note_type 来源
     args = ap.parse_args(argv)
 

@@ -283,8 +283,8 @@ def _obsidian_frontmatter_errors(fm: dict, text: str) -> list[dict]:  # 校验�
             fail(key, f"frontmatter 缺少非空字段 {key}")  # 不隐式回退隐藏坏输入
     if fm.get("template_version") != "v4-obsidian":  # 显式指定模板也必须正确声明
         fail("template_version", "template_version 必须是 v4-obsidian")  # 避免声明与执行版本分叉
-    if fm.get("note_type") not in ("lecture", "short"):  # 类型为受限枚举
-        fail("note_type", "note_type 必须是 lecture 或 short")  # 与正文门禁口径一致
+    if fm.get("note_type") not in V4_NOTE_TYPES:  # 类型为受限枚举（含轻量 brief）
+        fail("note_type", "note_type 必须是 lecture、short 或 brief")  # 与正文门禁口径一致
     if not isinstance(fm.get("tags"), list) or not fm["tags"] or not all(isinstance(tag, str) and tag.strip() for tag in fm["tags"]):  # 标签必须是非空字符串列表
         fail("tags", "tags 必须是非空列表且每项非空")  # 不接受行内数组及标量
     created = fm.get("created")  # 日期保持原始文本类型
@@ -1157,7 +1157,7 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
 #   V4-FM    出现 frontmatter                                              [error]
 #   V4-HEAD  出现一级标题 / 首行不是「> 核心主线：」/ 引语块缺「课程来源：」   [error]
 #   V4-NAME  文件名不符合「<序号>-<主题>.md」                               [warning]
-#   V4-NT    note_type 非 lecture/short                                    [error]
+#   V4-NT    note_type 非 lecture/short/brief                              [error]
 #   V4-LIST  正文使用 - / * 列表（应为 +）                                 [warning]
 #   V4-SEC   小节实质内容 < 3 行                                           [error]
 #   V4-IDEA  正文小节末尾缺「> **记住这个就够了**：<一句话>」收尾                [warning]
@@ -1182,6 +1182,12 @@ def check_note_v3(text: str, note_path: Path, meta_path: Path | None,
 #   V4-KM-REL lecture 知识地图须为概念关系图：概念卡全部出现在节点中、带标签关系边
 #            ≥ 概念数-1 [error]；节点大面积等于小节标题（复刻目录）[warning]
 #   V4-SHOT  本地截图须放在正文编号小节内、与截图清单的 section 一致、不重复引用 [warning]
+#   ---- brief（轻量笔记）专用：不跑 V4-SEC / V4-IDEA / V4-SUM / V4-KM*、概念卡「出现」与自测题数量下限 ----
+#   V4B-POINTS 缺「## 要点」，或要点 + 条目不在 3~7 条，或单条去列表符号后不足 8 字 [error]
+#   V4B-EMPTY  任一 ## 小节（时间索引除外）没有实质内容行                      [error]
+#   V4B-NUM    出现「## N.」编号小节（内容这么多应改用 short）                 [warning]
+#   V4B-CARDS  概念卡超过 3 张                                              [warning]
+#   V4B-QUIZ   自测题超过 2 道（可省略整节；写了按 V4-E5 / V4-QA 检查格式）    [warning]
 
 V4_INDEX_HEADING = "视频时间索引"  # 时间索引小节标题关键词
 # V4-E2：时间索引条目「+ [mm:ss] 标题」，脚本填链后为「+ [mm:ss](URL) 标题」（兼容 - / *）
@@ -1215,6 +1221,13 @@ V4_ANALOGY_OK_RE = re.compile(r"^\s*(?:[+>]\s*)?\*\*打个比方(?:（笔记补�
 # V4-YUQUE：语雀不兼容的两种写法（2026-11-07 在语雀实测）
 V4_YUQUE_SUBGRAPH_RE = re.compile(r"^\s*subgraph\s+[^\s\[]+\s*\[")  # subgraph 编号[标题]：语雀 Mermaid 报 Parse error
 V4_YUQUE_TEXT_FENCE_RE = re.compile(r"^\s*```\s*text\s*$")  # ```text：语雀识别成 latex 代码块
+V4_NOTE_TYPES = ("lecture", "short", "brief")  # V4-NT：v4 / v4-obsidian 允许的笔记类型
+V4B_POINTS_HEADING = "要点"  # V4B-POINTS：brief 必备小节标题（精确匹配）
+V4B_POINTS_RANGE = (3, 7)  # V4B-POINTS：要点条数上下限
+V4B_POINT_MIN_CHARS = 8  # V4B-POINTS：单条要点去列表符号后的最少字数
+V4B_MAX_CARDS = 3  # V4B-CARDS：概念卡上限
+V4B_MAX_QUIZ = 2  # V4B-QUIZ：自测题上限
+V4B_PLUS_ITEM_RE = re.compile(r"^\s*\+\s+(\S.*)$")  # V4B-POINTS：+ 列表条目（组：条目正文）
 
 
 def parse_concept_cards_v4(lines: list[str], start: int, end: int,
@@ -1363,6 +1376,55 @@ def v4_image_section_problems(lines: list[str], fence_state: list[bool],
     return problems  # 返回
 
 
+def _check_brief_structure(lines: list[str], fence_state: list[bool], sections: list,  # brief 专用结构检查
+                           err, warn, checks: dict) -> None:  # 通过回调写入 errors / warnings
+    """brief（轻量笔记）的三项结构检查，结果写入 checks：
+
+    V4B-POINTS：必须有标题恰为「要点」的 ## 小节，其中 + 条目 3~7 条，单条去列表符号后 ≥ 8 字 [error]
+    V4B-EMPTY：任一 ## 小节（时间索引除外）没有实质内容（非空、非标题、非分隔线）[error]
+    V4B-NUM：出现「## N.」编号小节，提示内容多时改用 short [warning]
+    """
+    head = next((i for i, l in enumerate(lines)  # 「## 要点」行号
+                 if not fence_state[i] and H2_RE.match(l)  # 代码块外的 ## 标题
+                 and H2_RE.match(l).group(1).strip() == V4B_POINTS_HEADING), None)  # 标题精确等于「要点」
+    points: list[str] = []  # 要点条目正文
+    short_points: list[int] = []  # 过短条目的行号
+    if head is None:  # 缺要点节
+        err("V4B-POINTS", "轻量笔记缺少「## 要点」小节（3~7 条 + 列表，每条一句能独立复述的话）")  # 报错
+    else:  # 有要点节，数条目
+        for j in range(head + 1, next_h2_after(lines, head + 1)):  # 节内逐行
+            m = V4B_PLUS_ITEM_RE.match(lines[j])  # + 条目
+            if fence_state[j] or not m:  # 代码块内或非条目
+                continue  # 跳过
+            body = re.sub(r"[\s*`]", "", m.group(1))  # 去空白、加粗与行内代码符号后计字
+            points.append(body)  # 记录
+            if len(body) < V4B_POINT_MIN_CHARS:  # 过短
+                short_points.append(j + 1)  # 记录行号
+                err("V4B-POINTS", f"第{j + 1}行要点只有 {len(body)} 字，至少 {V4B_POINT_MIN_CHARS} 字"
+                                  "（写成一句完整、能独立复述的话）", j + 1)  # 报错
+        lo, hi = V4B_POINTS_RANGE  # 条数上下限
+        if not lo <= len(points) <= hi:  # 条数越界
+            err("V4B-POINTS", f"「要点」有 {len(points)} 条，要求 {lo}~{hi} 条 + 列表", head + 1)  # 报错
+    checks["brief_points"] = {"passed": head is not None and not short_points  # 是否通过
+                              and V4B_POINTS_RANGE[0] <= len(points) <= V4B_POINTS_RANGE[1],  # 条数合规
+                              "found": head is not None, "count": len(points)}  # 明细
+    empty: list[str] = []  # 空小节标题
+    for title, body in sections:  # 遍历 ## 小节
+        if title is None or V4_INDEX_HEADING in title:  # 前言与时间索引不查
+            continue  # 跳过
+        real = [l for l in substantive_lines(body) if not l.lstrip().startswith("#")]  # 去掉 ### 等标题行
+        if not real:  # 没有实质内容
+            empty.append(title)  # 记录
+            err("V4B-EMPTY", f"小节「{title}」没有内容：轻量笔记的可选小节没内容就整节删掉")  # 报错
+    checks["brief_empty_sections"] = {"passed": not empty, "empty": empty}  # 明细
+    numbered = [i + 1 for i, l in enumerate(lines)  # 编号小节行号
+                if not fence_state[i] and V2_H2_NUM_RE.match(l)]  # 代码块外的「## N.」
+    if numbered:  # 存在编号小节
+        warn("V4B-NUM", f"轻量笔记出现 {len(numbered)} 个「## N.」编号小节（首处第{numbered[0]}行）："
+                        "内容多到需要分节时改用 short", numbered[0])  # 提示
+    checks["brief_numbered_sections"] = {"passed": not numbered, "lines": numbered}  # 明细
+
+
 def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体复用四版全部正文门禁
                   txt_dir: Path | None, only_page: int | None = None,  # 保留既有位置参数兼容性
                   note_type: str | None = None, variant: str | None = None, source_lang: str | None = None) -> dict:  # 保留变体位置并在尾部追加来源语言
@@ -1426,9 +1488,10 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
     foreign_lecture = nt == "lecture" and bool(language) and not str(language).strip().lower().startswith("zh")  # 中文前缀及未知语言不提示
 
     # ---- V4-NT：note_type 取值 ----
-    if nt not in ("lecture", "short"):  # 非法取值
-        err("V4-NT", f"note_type「{nt}」非法，只能是 lecture / short")  # 报错
-    checks["note_type_valid"] = {"passed": nt in ("lecture", "short"), "note_type": nt}  # 明细
+    if nt not in V4_NOTE_TYPES:  # 非法取值
+        err("V4-NT", f"note_type「{nt}」非法，只能是 lecture / short / brief")  # 报错
+    checks["note_type_valid"] = {"passed": nt in V4_NOTE_TYPES, "note_type": nt}  # 明细
+    is_brief = nt == "brief"  # 轻量笔记走 V4B-* 分支，跳过长课结构检查
 
     # ---- V4-FM：禁止 frontmatter ----
     has_fm = FRONTMATTER_RE.match(text) is not None  # 是否以 --- 元数据块开头
@@ -1481,6 +1544,8 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
     # ---- V4-SEC：每个 ## 小节（除 目录/视频时间索引）≥3 行实质内容 ----
     sec_detail = {}  # 每节行数
     for title, body in sections:  # 遍历小节
+        if is_brief:  # brief 不要求每节 3 行，改由 V4B-EMPTY 检查空小节
+            break  # 整项跳过
         if title is None or any(k in title for k in V3_SEC_SKIP):  # 跳过前言/结构性小节
             continue  # 不检查
         n = len(substantive_lines(body))  # 实质内容行数
@@ -1489,12 +1554,14 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
             err("V4-SEC", f"小节「{title}」实质内容不足（{n} 行非空文本，需至少 3 行）")  # 报错
     checks["section_content"] = {"passed": not any(e["check"] == "V4-SEC" for e in errors),
                                  "lines_per_section": sec_detail}  # 明细
+    if is_brief:  # ---- brief 专用结构检查：V4B-POINTS / V4B-EMPTY / V4B-NUM ----
+        _check_brief_structure(lines, fence_state, sections, err, warn, checks)  # 写入 errors / warnings / checks
 
     # ---- V4-IDEA：正文小节先场景/问题、后结论，节末以「> **记住这个就够了**：」收尾 [warning] ----
     recall_missing: list[str] = []  # 缺收尾句的小节
     for i, line in enumerate(lines):  # 按行找小节标题（需要行号）
         hm = H2_RE.match(line)  # ## 标题
-        if not hm or fence_state[i] or any(k in hm.group(1) for k in V4_STRUCT_SKIP):  # 非正文小节
+        if is_brief or not hm or fence_state[i] or any(k in hm.group(1) for k in V4_STRUCT_SKIP):  # 非正文小节；brief 不要求节末收尾句
             continue  # 跳过
         end = next_h2_after(lines, i + 1)  # 本节结束
         subs = [j for j in range(i + 1, end)  # 本节实质内容行号
@@ -1568,7 +1635,9 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
         appear = c["fields"].get("出现")  # 出现字段
         if not defs or not defs[0]:  # 定义缺失/为空
             err("V4-E6", f"概念卡「{c['name']}」缺少非空「定义」字段", c["line"])  # 报错
-        if not appear or not appear[0]:  # 出现缺失/为空
+        if is_brief:  # brief 没有编号小节，「出现」不要求也不校验
+            pass  # 只检查定义与依赖/易混
+        elif not appear or not appear[0]:  # 出现缺失/为空
             err("V4-E6", f"概念卡「{c['name']}」缺少非空「出现」字段", c["line"])  # 报错
         else:  # 出现字段存在
             value, vline = appear  # 值与行号
@@ -1609,6 +1678,9 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
                               "不在概念卡片集合内", conf[1])  # 提示
     checks["concept_cards"] = {"passed": not any(e["check"] == "V4-E6" for e in errors),
                                "cards": len(cards)}  # 明细
+    if is_brief and len(cards) > V4B_MAX_CARDS:  # ---- V4B-CARDS：brief 概念卡上限 [warning] ----
+        warn("V4B-CARDS", f"轻量笔记有 {len(cards)} 张概念卡，建议不超过 {V4B_MAX_CARDS} 张；"
+                          "概念这么多时改用 short", card_head + 1)  # 提示
 
     if foreign_lecture:  # 仅外语讲义要求中文术语保留原文
         body_lines = []  # 编号节叙述范围不含目录概念卡与标题本身
@@ -1638,7 +1710,10 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
 
     # ---- V4-E5：自测题（不折叠；数量 4~7 / 2~3） ----
     quiz_head = find_h2_line(lines, "自测题")  # 自测题节
-    if quiz_head is None:  # 缺失
+    if quiz_head is None and is_brief:  # brief 可以整节省略自测题
+        checks["quiz_count"] = {"passed": True, "count": 0, "found": False}  # 明细
+        checks["quiz_format"] = {"passed": True, "found": False}  # 明细
+    elif quiz_head is None:  # 缺失
         err("V4-E5", "缺少「自测题」章节")  # 报错
         checks["quiz_count"] = {"passed": False, "count": 0, "found": False}  # 明细
         checks["quiz_format"] = {"passed": False, "found": False}  # 明细
@@ -1646,11 +1721,13 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
         quiz_end = next_h2_after(lines, quiz_head + 1)  # 节结束
         questions = parse_quiz_questions_v4(lines, quiz_head + 1, quiz_end)  # 解析题目
         n_q = len(questions)  # 题数
-        want = V3_QUIZ_RANGE.get(nt, (4, 7))  # 数量范围
-        if not want[0] <= n_q <= want[1]:  # 越界
+        want = (0, V4B_MAX_QUIZ) if is_brief else V3_QUIZ_RANGE.get(nt, (4, 7))  # 数量范围（brief 0~2）
+        if is_brief and n_q > V4B_MAX_QUIZ:  # brief 超量只提示
+            warn("V4B-QUIZ", f"轻量笔记有 {n_q} 道自测题，建议不超过 {V4B_MAX_QUIZ} 道", quiz_head + 1)  # 提示
+        elif not want[0] <= n_q <= want[1]:  # 越界
             err("V4-E5", f"自测题数量为 {n_q}，要求 {want[0]}~{want[1]} 道（note_type={nt}）")  # 报错
-        checks["quiz_count"] = {"passed": want[0] <= n_q <= want[1], "count": n_q,
-                                "found": True}  # 明细
+        checks["quiz_count"] = {"passed": is_brief or want[0] <= n_q <= want[1], "count": n_q,
+                                "found": True}  # 明细（brief 超量是 warning，不算失败）
         fmt_ok = True  # 格式是否全部合规
         qa_short: list[int] = []  # V4-QA：答案过短的题号
         for q in questions:  # 逐题检查
@@ -1694,7 +1771,9 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
     # ---- V4-SUM：本讲小结（lecture 必备）= 小结表 + 「学完能说的 3 句话」恰好 3 条 [warning] ----
     sum_problems: list[str] = []  # 本项问题
     sum_head = find_h2_line(lines, V4_SUMMARY_HEADING)  # 「## 本讲小结」行号
-    if sum_head is None:  # 没有小结
+    if is_brief:  # brief 不检查本讲小结（要点节本身就是小结）
+        pass  # 整项跳过，下方明细记为通过
+    elif sum_head is None:  # 没有小结
         if nt == "lecture":  # 只有 lecture 要求
             sum_problems.append("missing")  # 记录
             warn("V4-SUM", "缺少「## 本讲小结」（放在本讲知识地图之后：机制/概念 | 解决什么问题 | 一句话 "
@@ -1720,7 +1799,7 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
                 sum_problems.append("three_count")  # 记录
                 warn("V4-SUM", f"「学完能说的 3 句话」下有 {len(items)} 条编号句子，应恰好 3 条", mark + 1)  # 提示
     checks["summary"] = {"passed": not sum_problems, "found": sum_head is not None,
-                         "problems": sum_problems}  # 明细
+                         "problems": sum_problems, "checked": not is_brief}  # 明细（brief 不检查）
 
     # ---- 转写稿时间行池（E2 白名单 + RATIO 共用） ----
     txt_files: list[Path] = sorted(Path(txt_dir).glob("*.txt")) if txt_dir else []  # 转写稿
@@ -1890,8 +1969,8 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
                     "concepts": len(card_names), "missing_concepts": missing,  # 概念覆盖
                     "edges": km["edges"], "labeled_edges": km["labeled_edges"],  # 边统计
                     "subgraphs": len(km["subgraphs"]), "toc_like_nodes": toc_hits}  # 分组与目录重合
-    else:  # short 可省
-        checks["knowledge_map"] = {"passed": None, "note": "short 型知识地图可省（不检查）"}  # 明细
+    else:  # short / brief 可省
+        checks["knowledge_map"] = {"passed": None, "note": f"{nt} 型知识地图可省（不检查）"}  # 明细
 
     # ---- V4-KM-LABEL：mermaid 节点标签卫生 [warning] ----
     label_problems = v3_mermaid_label_problems(lines)  # 复用 v3 扫描
@@ -1954,7 +2033,8 @@ def check_note_v4(text: str, note_path: Path, meta_path: Path | None,  # 变体�
     if variant == "obsidian":  # 元信息错误坐标已是原文件坐标
         _obsidian_shift_report(report, fm_end)  # 先转换全部正文诊断及明细
         report["errors"][:0] = fm_errors  # 再插入不需偏移的元信息错误
-        _obsidian_toc(report, text, fm_end)  # 目录直接生成原文件坐标
+        if not (is_brief and find_h2_line(lines, "目录") is None):  # brief 可以不写目录；写了就按维基目录检查
+            _obsidian_toc(report, text, fm_end)  # 目录直接生成原文件坐标
         report["checks"]["obsidian_frontmatter"] = {"passed": not fm_errors, "end_line": fm_end}  # 元信息结束位置供诊断
         report["template_version"] = "v4-obsidian"  # 报告具体模板
         report["ok"] = not report["errors"]  # 合并后重新计算门禁结论
@@ -2022,7 +2102,7 @@ def main():
     ap.add_argument("--template", choices=["v4", "v4-obsidian"], default=None,  # 支持显式选择黑曜石变体
                     help="模板版本：v4（语雀直导版式，无 frontmatter）或 v4-obsidian；"  # 展示可选模板
                          "省略时按 frontmatter 声明自动识别")  # 普通四版仍默认无元信息
-    ap.add_argument("--note-type", choices=["lecture", "short"], default=None,
+    ap.add_argument("--note-type", choices=list(V4_NOTE_TYPES), default=None,  # 含轻量 brief
                     help="仅 v4：笔记类型；省略取 metadata.json 的 suggested_note_type，"
                          "再缺省为 lecture")  # v4 的 note_type 来源
     ap.add_argument("--source-lang", default=None, help="来源语言；省略取目标分集实际识别、音频或字幕语言")  # 仅第四版外语讲义检查术语原文

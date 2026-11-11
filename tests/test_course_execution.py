@@ -488,3 +488,23 @@ def test_mark_failed_preserves_explicit_recovery_instructions(course):  # 调用
     assert result["status"] == "failed" and item["reason"] == "字幕元数据失效"  # 原因清理外围空白且不丢正文
     assert item["next_step"] == "重新抓取这一集" and item["rerun"] == "python custom_retry.py --page 1"  # 自定义恢复方式完整保留
     assert cp.course_next(root)["index"] == 2  # 手工标记失败同样允许继续后续集
+
+
+def test_course_never_uses_brief_note_type(course):  # 课程模式防御：抓取建议为 brief 时课程仍按 short 制作
+    root = course()  # 四集课程全部开工
+    metadata, meta, _ = cache_metadata(root)  # 已抓取的元数据
+    meta["suggested_note_type"] = "brief"  # 模拟抓取脚本建议 brief
+    metadata.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")  # 写回缓存
+    note = step_of(cp.course_next(root), "note")  # 交出的制作步骤
+    assert note["nav_argv"][-2:] == ["--note-type", "short"]  # 导航按 short
+    assert note["validate_argv"][-2:] == ["--note-type", "short"]  # 门禁按 short
+    assert cp.course_note_type(metadata) == "short"  # 进程内门禁同一口径
+
+
+@pytest.mark.parametrize("content", [None, "{坏的 JSON", json.dumps({"suggested_note_type": "lecture"}), json.dumps(["不是对象"])])  # 缺失、损坏、非 brief、非对象
+
+def test_course_note_type_leaves_other_cases_alone(tmp_path, content):  # 只拦 brief，其余交给原有逻辑
+    metadata = tmp_path / "metadata.json"  # 元数据路径
+    if content is not None:  # None 表示文件不存在
+        metadata.write_text(content, encoding="utf-8")  # 写入测试内容
+    assert cp.course_note_type(metadata) is None  # 不干预
