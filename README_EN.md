@@ -37,6 +37,7 @@ Four platforms · Subtitle fetching · Local speech recognition · Key-frame scr
 - **Xiaohongshu without login**: parses the data embedded in the share page and downloads video notes directly — no signature, no account (video notes only; image notes and comments are not supported)
 - **Lecture-note templates**: lecture-style body (each section opens with a scenario or question, develops in paragraphs, and closes with a "remember this" takeaway), bolded key terms, real code references, a concept map, a lesson summary, concept cards, interview-style self-test questions, and an unfolded video time index with deep links; v4 targets Yuque imports, while v4-obsidian adds frontmatter and a Wiki-link table of contents
 - **Original-language terms**: English courses produce Chinese notes with **中文（Original）** at each term's first appearance and an original-term field on Chinese concept cards
+- **Lightweight notes for short videos**: Douyin and Xiaohongshu videos of 5 minutes or less get a `brief` note by default — a few restatable key points plus optional details, with no padded sections; on other platforms ask for a shorter note to use it (not used in course mode)
 
 ## 🧩 Workflow
 
